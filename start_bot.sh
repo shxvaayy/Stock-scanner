@@ -3,9 +3,9 @@
 # Retries up to 5 times if network/auth fails
 
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-cd /Users/rudraym/Trader
+cd "$(dirname "$0")"
 
-VENV_PYTHON="/Users/rudraym/Trader/.venv/bin/python3"
+VENV_PYTHON="$(dirname "$0")/.venv/bin/python3"
 TODAY=$(date +%Y-%m-%d)
 mkdir -p "logs/$TODAY"
 
