@@ -143,6 +143,9 @@ STOCKS = [
     "SUNPHARMA-EQ",
     "BAJFINANCE-EQ",
     "LT-EQ", "TITAN-EQ", "BHARTIARTL-EQ", "MARUTI-EQ",
+    # 2026-07-06: user additions — all liquid enough for intraday
+    # (avg daily turnover: ETERNAL ~Rs741Cr, RAMCOSYS ~Rs355Cr, BELRISE ~Rs133Cr)
+    "ETERNAL-EQ", "RAMCOSYS-EQ", "BELRISE-EQ",
 ]
 
 SECTOR_MAP = {
@@ -154,6 +157,7 @@ SECTOR_MAP = {
     "SUNPHARMA-EQ": "Pharma",
     "LT-EQ": "Infra", "BHARTIARTL-EQ": "Telecom",
     "TITAN-EQ": "Other", "MARUTI-EQ": "Auto",
+    "ETERNAL-EQ": "Other", "RAMCOSYS-EQ": "IT", "BELRISE-EQ": "Auto",
 }
 
 # S1 v2.1: RSI(5) on 5-min candles with uptick confirmation
