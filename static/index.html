@@ -8,7 +8,7 @@
   :root {
     --page: #0d0d0d; --surface: #1a1a19; --ink: #fff; --ink-2: #c3c2b7;
     --muted: #898781; --grid: #2c2c2a; --border: rgba(255,255,255,.10);
-    --accent: #3987e5; --good: #0ca30c; --bad: #e66767; --amber: #fab219;
+    --accent: #3987e5; --violet: #7c3aed; --good: #0ca30c; --bad: #e66767; --amber: #fab219;
     --hover: rgba(137,135,129,.10);
   }
   @media (prefers-color-scheme: light) {
@@ -20,7 +20,7 @@
   body { background: var(--page); color: var(--ink);
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
     padding: 22px; max-width: 1180px; margin: 0 auto; }
-  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
   h1 { font-size: 20px; font-weight: 750; letter-spacing: -.01em; }
   h1 .theta { background: linear-gradient(120deg, #7c3aed, #3987e5); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border);
@@ -43,19 +43,53 @@
   .btn-stop { background: linear-gradient(120deg, #d03b3b, #a32222); border: none; color: #fff;
     box-shadow: 0 4px 16px rgba(208,59,59,.3); }
   .banner { background: rgba(250,178,25,.1); border: 1px solid var(--border); border-radius: 10px;
-    padding: 8px 14px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 16px; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-    padding: 14px 16px; animation: rise .4s ease both; }
-  .tile .label { font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-  .tile .value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .tile .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-  .pos { color: var(--good); } .neg { color: var(--bad); }
-  section { margin-bottom: 24px; }
-  h2 { font-size: 15px; font-weight: 680; margin-bottom: 10px; }
-  h2 .hint { font-weight: 400; font-size: 12.5px; color: var(--muted); margin-left: 8px; }
+    padding: 8px 14px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 18px; }
+
+  section { margin-bottom: 26px; }
+  h2 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .sec-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+
+  /* regime panel */
+  .regime-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--grid); }
+  .regime-cell { background: var(--surface); padding: 13px 16px; }
+  .regime-cell .k { font-size: 10.5px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .regime-cell .v { font-size: 19px; font-weight: 720; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .regime-cell .w { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .badge { font-size: 11px; font-weight: 750; padding: 3px 10px; border-radius: 999px; }
+  .badge.bull { background: rgba(12,163,12,.12); color: var(--good); }
+  .badge.bear { background: rgba(250,178,25,.15); color: var(--amber); }
+  .badge.crash { background: rgba(230,103,103,.25); color: var(--bad); }
+  .badge.buy { color: var(--good); } .badge.sell, .badge.exit { color: var(--bad); }
+
+  /* strategy cards */
+  .strats { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .strat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; animation: rise .4s ease both; position: relative; overflow: hidden; }
+  .strat::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .strat.s1::before { background: linear-gradient(90deg, #0ca30c, #0a8a3c); }
+  .strat.s2::before { background: linear-gradient(90deg, #3987e5, #7c3aed); }
+  .strat.s3::before { background: linear-gradient(90deg, #fab219, #e07b12); }
+  .strat h3 { font-size: 14px; font-weight: 720; margin-bottom: 2px; }
+  .strat .tag { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .strat p { font-size: 12.5px; color: var(--ink-2); line-height: 1.55; margin-bottom: 8px; }
+  .strat .facts { font-size: 11.5px; color: var(--muted); border-top: 1px dashed var(--grid); padding-top: 8px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  /* day story */
+  .story { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 13px 16px; animation: rise .4s ease both; }
+  .tile .label { font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .tile .value { font-size: 21px; font-weight: 720; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .tile .sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+  .funnel { padding: 14px 18px; font-size: 13px; }
+  .funnel .step { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .funnel .n { font-weight: 750; font-variant-numeric: tabular-nums; min-width: 46px; text-align: right; }
+  .funnel .bar { height: 8px; border-radius: 4px; background: var(--accent); opacity: .8; }
+  .funnel .lbl { color: var(--ink-2); font-size: 12.5px; }
+  .whynot { font-size: 12px; color: var(--muted); padding: 10px 18px; border-top: 1px dashed var(--grid); }
+
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase;
     color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--grid); }
@@ -64,16 +98,18 @@
   tbody tr:hover td { background: var(--hover); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .empty { padding: 26px; text-align: center; color: var(--muted); }
-  .badge { font-size: 11px; font-weight: 750; padding: 2px 9px; border-radius: 999px; }
-  .badge.bull { background: rgba(12,163,12,.12); color: var(--good); }
-  .badge.bear { background: rgba(230,103,103,.12); color: var(--bad); }
-  .badge.crash { background: rgba(230,103,103,.25); color: var(--bad); }
-  .badge.buy { color: var(--good); } .badge.sell, .badge.exit { color: var(--bad); }
+
+  .diary { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 16px 18px;
+    max-height: 460px; overflow-y: auto; white-space: pre-wrap; color: var(--ink-2); }
   .logbox { font: 11.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 14px 16px;
-    max-height: 320px; overflow-y: auto; white-space: pre-wrap; color: var(--ink-2); }
+    max-height: 300px; overflow-y: auto; white-space: pre-wrap; color: var(--ink-2); }
   .thought { padding: 8px 14px; border-bottom: 1px dashed var(--grid); font-size: 12.5px; animation: rise .3s ease both; }
   .thought:last-child { border-bottom: none; }
   .thought .meta { color: var(--muted); font-size: 11px; }
+  .dec { font-size: 10.5px; font-weight: 750; padding: 1px 8px; border-radius: 999px; letter-spacing: .03em; }
+  .dec.WATCHING { background: rgba(250,178,25,.14); color: var(--amber); }
+  .dec.FILTERED { background: rgba(137,135,129,.18); color: var(--muted); }
+  .dec.ENTRY, .dec.BUY, .dec.TRADED { background: rgba(12,163,12,.14); color: var(--good); }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.35);
     border-top-color: #fff; border-radius: 50%; animation: r .7s linear infinite; vertical-align: -2px; margin-right: 6px; }
   @keyframes r { to { transform: rotate(360deg); } }
@@ -83,74 +119,129 @@
   svg text { font: 11px system-ui, sans-serif; fill: var(--muted); }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  details summary { cursor: pointer; font-weight: 650; font-size: 13px; padding: 12px 18px; color: var(--ink-2); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1><span class="theta">Auto</span>Theta <span style="font-weight:400;font-size:13px;color:var(--muted)">paper trading bot</span></h1>
+  <h1><span class="theta">Auto</span>Theta <span style="font-weight:400;font-size:13px;color:var(--muted)">Nifty paper-trading bot</span></h1>
   <span class="pill"><span class="dot" id="botDot"></span><b id="botState">…</b></span>
   <span class="pill"><span class="dot" id="mktDot"></span><span id="mktState">…</span></span>
-  <span class="pill" id="regimePill" style="display:none">Regime: <span class="badge" id="regimeBadge"></span></span>
   <div class="actions">
     <button class="btn-start" id="startBtn" onclick="botCtl('start')">▶ Start Bot</button>
     <button class="btn-stop" id="stopBtn" onclick="botCtl('stop')">■ Stop Bot</button>
   </div>
 </header>
 
-<div class="banner">⚠ Paper trading — real market data, simulated money. Signals are hypotheses, not guarantees. Validate 30+ sessions before considering real capital.</div>
-
-<div class="tiles" id="tiles"></div>
+<div class="banner">⚠ Paper trading — the bot reads <b>real Angel One market data</b> but trades with <b>simulated money</b> (₹2,50,000). No real orders are ever placed.</div>
 
 <section>
-  <h2>Equity Curve <span class="hint">cumulative paper P&amp;L across sessions, after costs</span></h2>
-  <div class="card" style="padding:16px" id="equityCard"><div class="empty">Loading…</div></div>
+  <h2>Market Regime <span class="badge" id="regimeBadge" style="display:none"></span></h2>
+  <div class="sec-sub">Every morning at 9:15 the bot classifies the day before trading — BULL trades normally, BEAR trades cautiously, CRASH stops entirely.</div>
+  <div class="card"><div class="regime-grid" id="regimeGrid"><div class="empty" style="grid-column:1/-1">Regime appears after the bot's morning startup.</div></div></div>
 </section>
 
 <section>
-  <h2>Trades <span class="hint">entries &amp; exits with reasons</span>
-    <select id="daySel" onchange="loadDay()" style="margin-left:10px"></select>
-  </h2>
+  <h2>The Three Strategies</h2>
+  <div class="sec-sub">All three run simultaneously during market hours, each with its own capital and hard loss caps.</div>
+  <div class="strats">
+    <div class="strat s1">
+      <h3>1 · RSI Bounce</h3>
+      <div class="tag">5-min mean reversion · 10:15 AM – 2:00 PM</div>
+      <p>Waits for a Nifty-50 stock to get <b>panic-sold</b> (5-min RSI below 20), confirms the bounce has started, then buys the recovery. Six filters must all pass — uptrend intact, above VWAP, 1.5× volume, real momentum.</p>
+      <div class="facts">Exit: half at RSI 50, rest on full recovery · ATR stop · 75-min time stop<br>Max 3 positions · daily loss cap ₹7,500</div>
+    </div>
+    <div class="strat s2">
+      <h3>2 · RSI Multi-Timeframe</h3>
+      <div class="tag">15-min + 5-min alignment · 10:15 AM – 2:30 PM</div>
+      <p>Same bounce idea but <b>three screens must agree</b>: the daily chart allows mean reversion, the 15-min chart is oversold in a choppy market (low KER), and the 5-min chart prints a green trigger candle with weak-buyer volume (MFI &lt; 30).</p>
+      <div class="facts">Exit: RSI 50 / VWAP touch / 75 min · 3×ATR disaster stop · hard close 2:30 PM<br>Max 3 positions · daily loss cap ₹7,500</div>
+    </div>
+    <div class="strat s3">
+      <h3>3 · Iron Condor</h3>
+      <div class="tag">Nifty options · weekly expiry day only</div>
+      <p>On expiry day, sells a <b>put + call around Nifty's price</b> and buys protective wings. If Nifty stays inside the range till close, the sold options decay to zero and the premium is kept. Max loss is capped by the wings.</p>
+      <div class="facts">Runs once a week · VIX-gated (no trade above VIX 22)<br>Blackout on RBI / Budget / Fed days</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>What Happened <select id="daySel" onchange="loadDay()" style="margin-left:8px"></select></h2>
+  <div class="sec-sub">The day's story: how many signals the bot saw, how many survived the filters, and what they earned.</div>
+  <div class="story" id="storyTiles"></div>
+  <div class="card">
+    <div class="funnel" id="funnel"><div class="empty">No activity recorded.</div></div>
+    <div class="whynot" id="whynot" style="display:none"></div>
+  </div>
+</section>
+
+<section>
+  <h2>Bot's Daily Diary</h2>
+  <div class="sec-sub">The bot writes a diary at day end — market mood, what it saw, what it skipped and why. This is the best place to understand it.</div>
+  <div class="card"><div class="diary" id="diaryBox">No diary for this day.</div></div>
+</section>
+
+<section>
+  <h2>Trades</h2>
+  <div class="sec-sub">Every simulated entry and exit, with the exact reason.</div>
   <div class="card" id="tradesCard"><div class="empty">Loading…</div></div>
+</section>
+
+<section>
+  <h2>Overall Performance</h2>
+  <div class="sec-sub">Cumulative paper profit across all sessions, after ~0.2% costs per trade.</div>
+  <div class="story" id="perfTiles"></div>
+  <div class="card" style="padding:16px" id="equityCard"><div class="empty">Loading…</div></div>
 </section>
 
 <div class="grid2">
   <section>
-    <h2>Bot Thoughts <span class="hint">live decision journal — why it did or didn't trade</span></h2>
-    <div class="card" id="thoughtsCard" style="max-height:380px;overflow-y:auto"><div class="empty">No thoughts yet today.</div></div>
+    <h2>Live Thoughts</h2>
+    <div class="sec-sub"><span class="dec WATCHING">WATCHING</span> = signal spotted, waiting · <span class="dec FILTERED">FILTERED</span> = rejected by a filter · <span class="dec ENTRY">ENTRY</span> = traded</div>
+    <div class="card" id="thoughtsCard" style="max-height:380px;overflow-y:auto"><div class="empty">No thoughts for this day.</div></div>
   </section>
   <section>
-    <h2>Console Log <span class="hint">raw bot output</span></h2>
+    <h2>Console Log</h2>
+    <div class="sec-sub">Raw bot output for debugging.</div>
     <div class="card"><div class="logbox" id="logBox">No log yet.</div></div>
   </section>
 </div>
 
-<footer>AutoTheta v3.0 · regime-adaptive · risk caps hard-coded · dashboard auto-refreshes every 15s while the bot runs</footer>
+<footer>AutoTheta v3.0 · risk caps hard-coded: 1% per trade, ₹7,500/strategy/day, ₹15,000 global · auto-refreshes every 15s while running</footer>
 
 <script>
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const fmtINR = v => (v < 0 ? "-" : "") + "₹" + Math.abs(Math.round(v)).toLocaleString("en-IN");
 const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
 let status = null, selectedDay = null;
-
 async function j(url, opts) { return (await fetch(url, opts)).json(); }
 
 async function refreshStatus() {
   status = await j("/api/status");
-  const bd = document.getElementById("botDot"), bs = document.getElementById("botState");
-  bd.className = "dot " + (status.bot_running ? "on" : "off");
-  bs.textContent = status.bot_running ? "Bot running · pid " + status.pid : "Bot stopped";
-  const md = document.getElementById("mktDot");
-  md.className = "dot " + status.market;
+  document.getElementById("botDot").className = "dot " + (status.bot_running ? "on" : "off");
+  document.getElementById("botState").textContent = status.bot_running ? "Bot running · pid " + status.pid : "Bot stopped";
+  document.getElementById("mktDot").className = "dot " + status.market;
   document.getElementById("mktState").textContent = status.market_detail;
   document.getElementById("startBtn").style.display = status.bot_running ? "none" : "";
   document.getElementById("stopBtn").style.display = status.bot_running ? "" : "none";
-  if (status.regime) {
-    document.getElementById("regimePill").style.display = "";
-    const rb = document.getElementById("regimeBadge");
-    rb.textContent = status.regime;
-    rb.className = "badge " + status.regime.toLowerCase();
-  }
+}
+
+function renderRegime(r) {
+  const badge = document.getElementById("regimeBadge");
+  if (r.regime) { badge.style.display = ""; badge.textContent = r.regime; badge.className = "badge " + r.regime.toLowerCase(); }
+  else badge.style.display = "none";
+  const g = document.getElementById("regimeGrid");
+  if (!r.nifty) { g.innerHTML = `<div class="empty" style="grid-column:1/-1">No regime data for this day — the bot wasn't started that morning.</div>`; return; }
+  const cell = (k, v, w) => `<div class="regime-cell"><div class="k">${k}</div><div class="v">${v}</div><div class="w">${w}</div></div>`;
+  g.innerHTML =
+    cell("Nifty", r.nifty.toLocaleString("en-IN"), "index level at check") +
+    cell("200-day average", Math.round(r.dma200).toLocaleString("en-IN"), "long-term trend line") +
+    cell("Distance", (r.dist_pct > 0 ? "+" : "") + r.dist_pct + "%", "-3% = BEAR, -8% = CRASH") +
+    cell("India VIX", r.vix, "fear index — above 22 = no trades") +
+    cell("Trend strength (ADX)", r.adx, "below 25 favours mean reversion") +
+    (r.ibs != null ? cell("IBS", r.ibs, `position size × ${r.size_mult}`) : "");
 }
 
 async function botCtl(action) {
@@ -159,7 +250,6 @@ async function botCtl(action) {
   try {
     const r = await j("/api/bot/" + action, { method: "POST" });
     if (!r.ok) alert(r.error || "Failed");
-    else if (r.note) console.log(r.note);
   } finally {
     btn.disabled = false;
     btn.innerHTML = action === "start" ? "▶ Start Bot" : "■ Stop Bot";
@@ -174,29 +264,28 @@ async function loadDays() {
   sel.innerHTML = days.slice().reverse().map(x =>
     `<option value="${x.date}">${x.date}${x.closed ? ` · ${x.closed} trades` : ""}</option>`).join("") ||
     `<option>${status?.today || ""}</option>`;
-  if (!selectedDay) selectedDay = days.length ? days[days.length - 1].date : status?.today;
+  if (!selectedDay) {
+    const withTrades = days.filter(x => x.closed > 0);
+    selectedDay = withTrades.length ? withTrades[withTrades.length - 1].date : (days.length ? days[days.length - 1].date : status?.today);
+  }
   sel.value = selectedDay;
 
-  // tiles: today + all-time
-  const today = days.find(x => x.date === status?.today) || { pnl: 0, closed: 0, wins: 0 };
   const total = days.reduce((a, x) => a + x.pnl, 0);
   const totClosed = days.reduce((a, x) => a + x.closed, 0);
   const totWins = days.reduce((a, x) => a + x.wins, 0);
   const tile = (l, v, s, c) => `<div class="tile"><div class="label">${l}</div><div class="value ${c || ""}">${v}</div><div class="sub">${s || ""}</div></div>`;
-  document.getElementById("tiles").innerHTML =
-    tile("Capital", fmtINR(d.capital), "paper allocation") +
-    tile("Today P&L", fmtINR(today.pnl), `${today.closed} closed trades`, cls(today.pnl)) +
+  document.getElementById("perfTiles").innerHTML =
+    tile("Capital", fmtINR(d.capital), "simulated allocation") +
     tile("All-time P&L", fmtINR(total), `${((total / d.capital) * 100).toFixed(2)}% of capital`, cls(total)) +
-    tile("Win rate", totClosed ? Math.round(totWins / totClosed * 100) + "%" : "—", `${totWins}/${totClosed} closed`, totClosed && totWins / totClosed >= .5 ? "pos" : "") +
-    tile("Sessions", String(days.length), "days with logs");
-
-  drawEquity(days, d.capital);
+    tile("Win rate", totClosed ? Math.round(totWins / totClosed * 100) + "%" : "—", `${totWins} of ${totClosed} closed trades`, totClosed && totWins / totClosed >= .5 ? "pos" : "") +
+    tile("Sessions", String(days.length), "days the bot has run");
+  drawEquity(days);
 }
 
-function drawEquity(days, capital) {
+function drawEquity(days) {
   const card = document.getElementById("equityCard");
   const withTrades = days.filter(x => x.closed > 0);
-  if (withTrades.length < 1) { card.innerHTML = `<div class="empty">No closed trades yet — the curve appears after the bot's first session with trades.</div>`; return; }
+  if (!withTrades.length) { card.innerHTML = `<div class="empty">The curve appears after the first session with closed trades.</div>`; return; }
   const W = 1080, H = 220, PL = 62, PR = 16, PT = 14, PB = 28;
   let run = 0;
   const pts = [{ d: "start", v: 0 }, ...withTrades.map(x => ({ d: x.date, v: (run += x.pnl) }))];
@@ -205,8 +294,7 @@ function drawEquity(days, capital) {
   const px = i => PL + (i / (pts.length - 1)) * (W - PL - PR);
   const py = v => PT + (1 - (v - min) / span) * (H - PT - PB);
   const line = pts.map((p, i) => `${px(i).toFixed(1)},${py(p.v).toFixed(1)}`).join(" ");
-  const up = vals[vals.length - 1] >= 0;
-  const col = up ? "var(--good)" : "var(--bad)";
+  const col = vals[vals.length - 1] >= 0 ? "var(--good)" : "var(--bad)";
   card.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%">
     <line x1="${PL}" y1="${py(0)}" x2="${W - PR}" y2="${py(0)}" stroke="var(--grid)"/>
     <text x="${PL - 8}" y="${py(max) + 4}" text-anchor="end">${fmtINR(max)}</text>
@@ -221,11 +309,44 @@ function drawEquity(days, capital) {
 
 async function loadDay() {
   selectedDay = document.getElementById("daySel").value;
-  const [t, th, lg] = await Promise.all([
+  const [t, th, lg, sm, rp] = await Promise.all([
     j("/api/trades?date=" + selectedDay),
     j("/api/thoughts?date=" + selectedDay),
     j("/api/logs?date=" + selectedDay),
+    j("/api/summary?date=" + selectedDay),
+    j("/api/report?date=" + selectedDay),
   ]);
+
+  renderRegime(sm.regime || {});
+
+  // story tiles + funnel
+  const tile = (l, v, s, c) => `<div class="tile"><div class="label">${l}</div><div class="value ${c || ""}">${v}</div><div class="sub">${s || ""}</div></div>`;
+  document.getElementById("storyTiles").innerHTML =
+    tile("Signals seen", sm.signals, "oversold moments spotted") +
+    tile("Filtered out", sm.decisions.FILTERED || 0, "rejected by quality filters") +
+    tile("Trades taken", sm.entries, "survived every filter") +
+    tile("Day P&L", fmtINR(sm.pnl), `${sm.wins}/${sm.closed} wins`, cls(sm.pnl));
+  const fu = document.getElementById("funnel");
+  const maxN = Math.max(sm.signals, 1);
+  const step = (n, lbl, col) => `<div class="step"><span class="n">${n}</span>
+    <span class="bar" style="width:${Math.max(2, n / maxN * 55)}%;background:${col}"></span>
+    <span class="lbl">${lbl}</span></div>`;
+  fu.innerHTML = sm.signals
+    ? step(sm.signals, "signals spotted (RSI oversold moments)", "var(--accent)") +
+      step((sm.decisions.WATCHING || 0), "watched — waiting for bounce confirmation", "var(--amber)") +
+      step((sm.decisions.FILTERED || 0), "rejected by filters (quality control)", "var(--muted)") +
+      step(sm.entries, "actually traded", "var(--good)")
+    : `<div class="empty">No activity recorded for this day.</div>`;
+  const wn = document.getElementById("whynot");
+  if (sm.top_filters && sm.top_filters.length) {
+    wn.style.display = "";
+    wn.innerHTML = "<b>Top rejection reasons:</b> " + sm.top_filters.map(([r, n]) => `${esc(r)} (${n}×)`).join(" · ");
+  } else wn.style.display = "none";
+
+  // diary
+  document.getElementById("diaryBox").textContent = rp.report || "No diary for this day — it's written at day end.";
+
+  // trades
   const card = document.getElementById("tradesCard");
   if (!t.trades.length) card.innerHTML = `<div class="empty">No trades on ${esc(t.date)}.</div>`;
   else card.innerHTML = `<div style="max-height:340px;overflow-y:auto"><table>
@@ -244,25 +365,21 @@ async function loadDay() {
       <td style="font-size:11.5px;color:var(--muted)">${esc(r.Reason)}</td>
     </tr>`; }).join("")}</tbody></table></div>`;
 
+  // thoughts
   const tc = document.getElementById("thoughtsCard");
   if (!th.thoughts.length) tc.innerHTML = `<div class="empty">No decision journal for ${esc(th.date)}.</div>`;
   else tc.innerHTML = th.thoughts.slice().reverse().map((x, i) => `
-    <div class="thought" style="animation-delay:${i * 30}ms">
-      <b>${esc(x.Stock)}</b> @ ${esc(x.Price)} — ${esc(x.Decision || x.Signal)}
-      <span class="badge ${esc((x.MarketRegime || "").toLowerCase())}">${esc(x.MarketRegime)}</span>
-      <div class="meta">${esc(x.Time)} · RSI ${esc(x["RSI(5)_5m"])} · ${esc(x.Reason)}</div>
+    <div class="thought" style="animation-delay:${i * 25}ms">
+      <b>${esc(x.Stock)}</b> @ ₹${esc(x.Price)} <span class="dec ${esc((x.Decision || "").split(" ")[0])}">${esc(x.Decision)}</span>
+      <div class="meta">${esc(x.Time)} · RSI(5) ${esc(x["RSI(5)_5m"])} · ${esc(x.Reason)}</div>
     </div>`).join("");
 
+  // log
   document.getElementById("logBox").textContent = lg.lines.length ? lg.lines.join("\n") : "No log for this day.";
   const lb = document.getElementById("logBox"); lb.scrollTop = lb.scrollHeight;
 }
 
-async function refreshAll() {
-  await refreshStatus();
-  await loadDays();
-  await loadDay();
-}
-
+async function refreshAll() { await refreshStatus(); await loadDays(); await loadDay(); }
 refreshAll();
 setInterval(async () => {
   await refreshStatus();

@@ -65,33 +65,77 @@ def index():
     return send_from_directory("static", "index.html")
 
 
+def parse_regime(date_str):
+    """Pull the regime-detection block the bot prints at 9:15 startup."""
+    out = {}
+    for name in ("console.log", "app.log"):
+        p = LOGS / date_str / name
+        if not p.exists():
+            continue
+        try:
+            txt = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        m = re.findall(r"Market Regime: (\w+)", txt)
+        if m:
+            out["regime"] = m[-1]
+        m = re.findall(r"Nifty: ([\d.]+) \| 200-DMA: ([\d.]+) \| Dist: ([-\d.]+)% "
+                       r"\| VIX: ([\d.]+) \| ADX: ([\d.]+)", txt)
+        if m:
+            nifty, dma, dist, vix, adx = m[-1]
+            out.update({"nifty": float(nifty), "dma200": float(dma),
+                        "dist_pct": float(dist), "vix": float(vix), "adx": float(adx)})
+        m = re.findall(r"IBS: ([\d.]+) \| IBS size mult: ([\d.]+)", txt)
+        if m:
+            out["ibs"], out["size_mult"] = float(m[-1][0]), float(m[-1][1])
+        if out:
+            break
+    return out
+
+
 @app.get("/api/status")
 def api_status():
     state, detail = market_state()
     pid = bot_pid()
-    regime = None
-    log_file = LOGS / today_str() / "app.log"
-    if not log_file.exists():
-        log_file = LOGS / today_str() / "console.log"
-    if log_file.exists():
-        try:
-            txt = log_file.read_text(errors="ignore")
-            mrx = re.findall(r"Market Regime: (\w+)", txt)
-            if mrx:
-                regime = mrx[-1]
-        except OSError:
-            pass
+    reg = parse_regime(today_str())
     return jsonify({
         "bot_running": pid is not None,
         "pid": pid,
         "market": state,
         "market_detail": detail,
         "now_ist": ist_now().strftime("%a, %d %b %Y %H:%M IST"),
-        "regime": regime,
+        "regime": reg.get("regime"),
+        "regime_detail": reg,
         "capital": CAPITAL,
         "env_ok": bool(os.environ.get("ANGEL_API_KEY") or (ROOT / ".env").exists()),
         "today": today_str(),
     })
+
+
+@app.get("/api/summary")
+def api_summary():
+    """One day, explained: regime, what the bot saw, why it filtered, results."""
+    d = request.args.get("date") or today_str()
+    thoughts_path = LOGS / d / "thoughts.csv"
+    decisions = {}
+    filter_reasons = {}
+    signals = 0
+    if thoughts_path.exists():
+        with open(thoughts_path) as f:
+            for r in csv.DictReader(f):
+                signals += 1
+                dec = (r.get("Decision") or "?").strip()
+                decisions[dec] = decisions.get(dec, 0) + 1
+                if dec == "FILTERED":
+                    reason = re.sub(r"[\d.()=]+", "", r.get("Reason") or "").strip()[:60]
+                    filter_reasons[reason] = filter_reasons.get(reason, 0) + 1
+    rows = read_trades(d)
+    pnl, closed, wins = day_pnl(rows)
+    entries = sum(1 for r in rows if (r.get("Action") or "").upper() in ("BUY", "ENTRY"))
+    top_filters = sorted(filter_reasons.items(), key=lambda x: -x[1])[:4]
+    return jsonify({"date": d, "regime": parse_regime(d), "signals": signals,
+                    "decisions": decisions, "top_filters": top_filters,
+                    "entries": entries, "closed": closed, "wins": wins, "pnl": pnl})
 
 
 @app.post("/api/bot/start")
