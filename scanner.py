@@ -1005,6 +1005,14 @@ def predict_series(symbol, horizon=15):
     contribs = x_today * beta
     drift = float(x_today @ beta + intercept)
 
+    # confidence scaling: if the model couldn't predict THIS stock's recent
+    # past (hit rate < ~50%), it has no business making a bold call now
+    if hit_rate is not None:
+        confidence = max(0.0, min(1.0, (hit_rate - 42) / 16))  # 42%→0, 58%→1
+    else:
+        confidence = 0.5
+    drift *= (0.25 + 0.75 * confidence)
+
     # news sentiment: small post-model nudge (no historical news to train on)
     senti_impact = max(-0.06, min(0.06, senti * 0.06))
     drift += senti_impact
@@ -1051,6 +1059,8 @@ def predict_series(symbol, horizon=15):
         "factors": factors,
         "sentiment": {"score": round(senti, 2), "pos": pos_hits, "neg": neg_hits},
         "backtest": {"hit_rate": hit_rate, "mae_pct": mae, "n": n_test,
+                     "confidence": ("HIGH" if hit_rate and hit_rate >= 55 else
+                                    "MEDIUM" if hit_rate and hit_rate >= 48 else "LOW"),
                      "note": "walk-forward, out-of-sample, this stock only"},
         "points": points,
         "disclaimer": ("Ridge regression trained on this stock's own history "

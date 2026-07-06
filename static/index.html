@@ -736,7 +736,12 @@ function renderPrediction(d, holder) {
       style="font-weight:700;fill:${col}">₹${fmtNum(mids[mids.length - 1])}</text>
   </svg>
   <div class="expected" style="color:${col}">Expected ${up ? "▲" : "▼"} ${sign(d.expected_move_pct)}% over next ${d.horizon} sessions
+    ${d.backtest && d.backtest.confidence ? `<span style="font-size:11px;font-weight:750;letter-spacing:.04em;padding:3px 9px;border-radius:999px;margin-left:6px;vertical-align:1px;${
+      d.backtest.confidence === "HIGH" ? "background:rgba(12,163,12,.12);color:var(--good)"
+      : d.backtest.confidence === "MEDIUM" ? "background:rgba(250,178,25,.15);color:var(--amber)"
+      : "background:rgba(230,103,103,.12);color:var(--bad)"}">${d.backtest.confidence} CONFIDENCE</span>` : ""}
     <span style="color:var(--muted);font-weight:500">(drift ${sign(d.drift_pct_per_day)}%/day · shaded = uncertainty band)</span></div>
+  ${d.backtest && d.backtest.confidence === "LOW" ? `<div style="font-size:12px;color:var(--bad);margin-top:6px">⚠ Model is stock pe apna recent past bhi predict nahi kar paya — prediction flatten kar di gayi hai, ise trade signal mat samajhna.</div>` : ""}
   ${d.backtest && d.backtest.hit_rate != null ? `
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
     <div class="tile" style="padding:10px 14px">
