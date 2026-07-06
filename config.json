@@ -1,0 +1,6 @@
+{
+  "capital": 250000,
+  "risk_per_trade_pct": 0.5,
+  "stop_loss_pct": 1.0,
+  "target_pct": 1.5
+}

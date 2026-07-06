@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NSE 9:15 Scanner</title>
+<style>
+  :root {
+    --page:        #f9f9f7;
+    --surface:     #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-2:       #52514e;
+    --muted:       #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+    --series-1:    #2a78d6;
+    --good:        #006300;
+    --bad:         #d03b3b;
+    --amber:       #fab219;
+    --warn-bg:     rgba(250,178,25,0.12);
+    --hover-wash:  rgba(137,135,129,0.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page:      #0d0d0d;
+      --surface:   #1a1a19;
+      --ink:       #ffffff;
+      --ink-2:     #c3c2b7;
+      --muted:     #898781;
+      --grid:      #2c2c2a;
+      --baseline:  #383835;
+      --border:    rgba(255,255,255,0.10);
+      --series-1:  #3987e5;
+      --good:      #0ca30c;
+      --bad:       #e66767;
+      --warn-bg:   rgba(250,178,25,0.08);
+      --hover-wash:rgba(137,135,129,0.10);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 22px; max-width: 1220px; margin: 0 auto;
+  }
+
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+  h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .status {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); background: var(--surface);
+    border-radius: 999px; padding: 5px 14px 5px 10px; font-size: 12.5px;
+  }
+  .status b { font-weight: 650; }
+  .status .detail { color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.open { background: #0ca30c; animation: pulse 2s infinite; }
+  .dot.pre { background: var(--amber); }
+  .dot.closed, .dot.holiday { background: #d03b3b; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(12,163,12,.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(12,163,12,0); }
+    100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); }
+  }
+  .actions { margin-left: auto; display: flex; gap: 8px; }
+  button {
+    font: 600 13px system-ui, sans-serif; padding: 9px 16px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+    cursor: pointer; transition: filter .15s;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.primary { background: var(--series-1); border-color: transparent; color: #fff; }
+  button.icon { padding: 9px 12px; }
+  button:disabled { opacity: .55; cursor: wait; }
+
+  .search { display: flex; gap: 8px; margin-bottom: 14px; }
+  .search input {
+    flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 11px 16px; color: var(--ink); font: 500 14px system-ui, sans-serif;
+  }
+  .search input:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .tile .label { font-size: 11.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .tile .value { font-size: 23px; font-weight: 680; margin-top: 4px; }
+  .tile .sub { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+
+  section { margin-bottom: 26px; }
+  h2 { font-size: 15px; font-weight: 660; margin-bottom: 10px; }
+  h2 .hint { font-weight: 400; font-size: 12.5px; color: var(--muted); margin-left: 8px; }
+
+  /* stock detail */
+  #stockCard { margin-bottom: 20px; }
+  .stock-head { display: flex; align-items: baseline; gap: 14px; padding: 16px 18px 0; flex-wrap: wrap; }
+  .stock-head .sym-big { font-size: 22px; font-weight: 700; }
+  .stock-head .asof { font-size: 12px; color: var(--muted); }
+  .stock-head .price-big { font-size: 22px; font-weight: 680; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .chg-chip { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .live-badge {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: #0ca30c;
+    display: none; align-items: center; gap: 5px;
+  }
+  .live-badge.on { display: inline-flex; }
+  .live-badge .ld { width: 7px; height: 7px; border-radius: 50%; background: #0ca30c; animation: pulse 1.5s infinite; }
+  .xbtn { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 0 2px; }
+  .ranges { display: flex; gap: 6px; padding: 12px 18px 0; align-items: center; flex-wrap: wrap; }
+  .ranges button { padding: 5px 13px; border-radius: 999px; font-size: 12px; }
+  .ranges button.active { background: var(--series-1); color: #fff; border-color: transparent; }
+  .ranges .zoom-hint { font-size: 11px; color: var(--muted); margin-left: auto; }
+  .stock-body { display: grid; grid-template-columns: 1.9fr 1fr; gap: 18px; padding: 8px 18px 16px; }
+  @media (max-width: 800px) { .stock-body { grid-template-columns: 1fr; } }
+  .chart-holder { position: relative; cursor: crosshair; user-select: none; }
+  .chart-holder.grabbing { cursor: grabbing; }
+  .chart-tip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--ink); color: var(--page); font: 600 11.5px system-ui, sans-serif;
+    padding: 4px 9px; border-radius: 7px; white-space: nowrap; z-index: 5;
+    font-variant-numeric: tabular-nums;
+  }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-content: start; }
+  .stat { border: 1px solid var(--grid); border-radius: 9px; padding: 8px 12px; }
+  .stat .label { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .stat .value { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .verdict { border-top: 1px solid var(--grid); padding: 12px 18px; font-size: 13px; }
+  .verdict .badge { margin-right: 8px; }
+  .verdict .plan { color: var(--ink-2); }
+  .verdict .why { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .stock-extra { border-top: 1px solid var(--grid); padding: 12px 18px 16px; }
+  .stock-extra h3 { font-size: 12.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .news-item { padding: 6px 0; border-bottom: 1px dashed var(--grid); font-size: 13px; }
+  .news-item:last-child { border-bottom: none; }
+  .news-item a { color: var(--ink); text-decoration: none; font-weight: 550; }
+  .news-item a:hover { color: var(--series-1); text-decoration: underline; }
+  .news-meta { font-size: 11.5px; color: var(--muted); }
+  .ai-panel {
+    background: var(--page); border: 1px solid var(--grid); border-radius: 10px;
+    padding: 14px 16px; margin-top: 10px; font-size: 13.5px; line-height: 1.65; display: none;
+  }
+  .ai-panel.show { display: block; }
+  .ai-panel p { margin-bottom: 9px; }
+  .ai-source { font-size: 11px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; font-weight: 650; }
+
+  /* settings */
+  #settingsPanel { margin-bottom: 20px; }
+  .settings-row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; padding: 14px 18px; }
+  .field label { display: block; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .field input {
+    width: 140px; background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; color: var(--ink); font: 600 14px system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  .field input:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
+  .settings-note { font-size: 12px; color: var(--muted); padding: 0 18px 14px; }
+
+  .disclaimer {
+    background: var(--warn-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 14px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 18px;
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--grid);
+  }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: var(--hover-wash); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .sym { font-weight: 650; cursor: pointer; }
+  .sym:hover { color: var(--series-1); text-decoration: underline; }
+  .why-cell { font-size: 11.5px; color: var(--muted); max-width: 300px; }
+  .badge { font-size: 11.5px; font-weight: 700; letter-spacing: .03em; white-space: nowrap; }
+  .badge.long { color: var(--good); } .badge.short { color: var(--bad); }
+  .badge.mixed { color: var(--muted); }
+  .empty { padding: 28px; text-align: center; color: var(--muted); }
+  .spin {
+    display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.4);
+    border-top-color: #fff; border-radius: 50%; animation: r .7s linear infinite;
+    vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes r { to { transform: rotate(360deg); } }
+  .chart-wrap { padding: 16px; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  svg text { font: 11px system-ui, sans-serif; fill: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NSE 9:15 Scanner</h1>
+  <span class="status"><span class="dot" id="dot"></span><b id="statusLabel">checking…</b><span class="detail" id="statusDetail"></span></span>
+  <div class="actions">
+    <button class="primary" id="scanBtn" onclick="runScan()">Run Scan</button>
+    <button id="reportBtn" onclick="loadReport(true)">Refresh Report</button>
+    <button class="icon" onclick="toggleSettings()" title="Settings">⚙</button>
+  </div>
+</header>
+
+<div class="search">
+  <input id="searchBox" list="symList" placeholder="Search ANY NSE stock — full market list loaded…"
+         autocomplete="off" onkeydown="if(event.key==='Enter')searchStock()">
+  <datalist id="symList"></datalist>
+  <button class="primary" id="searchBtn" onclick="searchStock()">View Stock</button>
+</div>
+
+<div class="card" id="stockCard" hidden></div>
+
+<div class="card" id="settingsPanel" hidden>
+  <div class="settings-row">
+    <div class="field"><label>Capital (₹)</label><input id="cfgCapital" type="number" min="10000" step="10000"></div>
+    <div class="field"><label>Risk / Trade (%)</label><input id="cfgRisk" type="number" min="0.05" max="5" step="0.05"></div>
+    <div class="field"><label>Stop Loss (%)</label><input id="cfgSL" type="number" min="0.2" max="10" step="0.1"></div>
+    <div class="field"><label>Target (%)</label><input id="cfgTarget" type="number" min="0.3" max="20" step="0.1"></div>
+    <button class="primary" onclick="saveSettings()">Save Settings</button>
+  </div>
+  <div class="settings-note">Changes apply from the next scan. Existing logged signals keep their original size. Tip: keep risk/trade ≤ 1% — that's what keeps the account alive.</div>
+</div>
+
+<div class="disclaimer">
+  ⚠ Learning &amp; paper-trading tool — signals are hypotheses, not guarantees.
+  Track results for 30+ sessions before considering real money. Data via Yahoo Finance (1–15 min delayed; not tick-by-tick).
+</div>
+
+<div class="tiles" id="tiles"></div>
+
+<section>
+  <h2>Top 60 Market Movers <span class="hint">poora Indian market (NSE + BSE, ~7000 stocks) — activity score se ranked: volume surge, move size, RSI extremes, 52w breakouts, liquidity</span></h2>
+  <div style="margin-bottom:10px; display:flex; gap:10px; align-items:center;">
+    <button class="primary" id="moversBtn" onclick="loadMovers(true)">🔥 Scan Full Market</button>
+    <span class="hint" id="moversStamp" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+  <div class="card" id="moversCard"><div class="empty">Full-market scan NSE + BSE ke ~7000 stocks download karta hai — 5–10 minute lagte hain. Result 10 min cache hota hai. Score = activity ranking, profit ki guarantee nahi.</div></div>
+</section>
+
+<section>
+  <h2>Today's Signals <span class="hint">scanner ke top setups — entry, stop, target &amp; size pre-computed · click any stock for details</span></h2>
+  <div class="card" id="signalsCard"><div class="empty">Run a scan to see signals.</div></div>
+</section>
+
+<section>
+  <h2>Paper-Trade Report <span class="hint">how past signals actually played out, after ~0.2% costs — the honest mirror</span></h2>
+  <div class="tiles" id="reportTiles"></div>
+  <div class="card" id="equityCard" style="display:none"><div class="chart-wrap" id="equityChart"></div></div>
+  <div class="card" id="tradesCard" style="margin-top:12px"><div class="empty">No closed trades yet. Signals close after their session ends — hit “Refresh Report”.</div></div>
+</section>
+
+<footer>
+  Rules baked in: fixed % risk per trade · stop loss always set · no averaging down · 3 losses in a day → stop.
+</footer>
+
+<script>
+const fmtINR = n => (n < 0 ? "−₹" : "₹") + Math.abs(Math.round(n)).toLocaleString("en-IN");
+const fmtNum = n => (+n).toLocaleString("en-IN");
+const cls = n => n > 0 ? "pos" : n < 0 ? "neg" : "";
+const sign = n => (n > 0 ? "+" : "") + n;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let cfg = null, lastScan = null, marketState = "closed";
+
+/* ================= small charts ================= */
+function sparkline(values, w = 110, h = 30) {
+  if (!values || values.length < 2) return "";
+  const min = Math.min(...values), max = Math.max(...values), span = (max - min) || 1;
+  const px = i => (i / (values.length - 1)) * (w - 6) + 3;
+  const py = v => h - 4 - ((v - min) / span) * (h - 8);
+  const pts = values.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  const last = values[values.length - 1];
+  return `<svg width="${w}" height="${h}" role="img" aria-label="price trend">
+    <title>${values[0]} → ${last}</title>
+    <polyline points="${pts}" fill="none" stroke="var(--series-1)" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${px(values.length - 1).toFixed(1)}" cy="${py(last).toFixed(1)}" r="3"
+      fill="var(--series-1)" stroke="var(--surface)" stroke-width="2"/>
+  </svg>`;
+}
+
+function equityChart(curve) {
+  const w = 720, h = 200, padL = 56, padR = 16, padT = 12, padB = 26;
+  const vals = [0, ...curve];
+  const min = Math.min(0, ...vals), max = Math.max(0, ...vals), span = (max - min) || 1;
+  const px = i => padL + (i / (vals.length - 1)) * (w - padL - padR);
+  const py = v => padT + (1 - (v - min) / span) * (h - padT - padB);
+  const pts = vals.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  const zero = py(0);
+  const dots = vals.map((v, i) => i === 0 ? "" :
+    `<circle cx="${px(i).toFixed(1)}" cy="${py(v).toFixed(1)}" r="3.5" fill="var(--series-1)"
+       stroke="var(--surface)" stroke-width="2"><title>Trade ${i}: cumulative ${fmtINR(v)}</title></circle>`).join("");
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Cumulative paper P&amp;L by trade">
+    <line x1="${padL}" y1="${zero}" x2="${w - padR}" y2="${zero}" stroke="var(--baseline)" stroke-width="1"/>
+    <text x="${padL - 8}" y="${py(max) + 4}" text-anchor="end">${fmtINR(max)}</text>
+    <text x="${padL - 8}" y="${zero + 4}" text-anchor="end">₹0</text>
+    ${min < 0 ? `<text x="${padL - 8}" y="${py(min) + 4}" text-anchor="end">${fmtINR(min)}</text>` : ""}
+    <text x="${padL}" y="${h - 8}">trade #1</text>
+    <text x="${w - padR}" y="${h - 8}" text-anchor="end">#${curve.length}</text>
+    <polyline points="${pts}" fill="none" stroke="var(--series-1)" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    ${dots}
+  </svg>
+  <div style="font-size:11.5px;color:var(--muted);margin-top:6px">Cumulative paper P&amp;L after costs, trade by trade</div>`;
+}
+
+/* ================= main interactive chart ================= */
+const CW = 760, CH = 290, PADL = 56, PADR = 14, PADT = 14, PADB = 26;
+const chart = { sym: null, range: "3M", data: [], i0: 0, i1: 0, timer: null, dragging: false, dragX: 0, dI0: 0, dI1: 0 };
+
+function drawChart() {
+  const holder = document.getElementById("chartHolder");
+  if (!holder || chart.data.length < 2) return;
+  const pts = chart.data.slice(chart.i0, chart.i1 + 1);
+  const vals = pts.map(p => p.c);
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const px = i => PADL + (i / (pts.length - 1)) * (CW - PADL - PADR);
+  const py = v => PADT + (1 - (v - min) / span) * (CH - PADT - PADB);
+  const line = vals.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  const area = `${PADL},${CH - PADB} ${line} ${(CW - PADR).toFixed(1)},${CH - PADB}`;
+  const mid = Math.floor(pts.length / 2);
+  const up = vals[vals.length - 1] >= vals[0];
+  holder.innerHTML = `
+  <svg id="chartSvg" viewBox="0 0 ${CW} ${CH}" width="100%" role="img" aria-label="price chart">
+    <defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--series-1)" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="var(--series-1)" stop-opacity="0"/>
+    </linearGradient></defs>
+    <line x1="${PADL}" y1="${py(min)}" x2="${CW - PADR}" y2="${py(min)}" stroke="var(--grid)"/>
+    <line x1="${PADL}" y1="${py(max)}" x2="${CW - PADR}" y2="${py(max)}" stroke="var(--grid)"/>
+    <line x1="${PADL}" y1="${py((min+max)/2)}" x2="${CW - PADR}" y2="${py((min+max)/2)}" stroke="var(--grid)" stroke-dasharray="3 4"/>
+    <text x="${PADL - 8}" y="${py(max) + 4}" text-anchor="end">${fmtNum(max)}</text>
+    <text x="${PADL - 8}" y="${py((min+max)/2) + 4}" text-anchor="end">${fmtNum(((min+max)/2).toFixed(1))}</text>
+    <text x="${PADL - 8}" y="${py(min) + 4}" text-anchor="end">${fmtNum(min)}</text>
+    <text x="${PADL}" y="${CH - 8}">${esc(pts[0].t)}</text>
+    <text x="${px(mid).toFixed(1)}" y="${CH - 8}" text-anchor="middle">${esc(pts[mid].t)}</text>
+    <text x="${CW - PADR}" y="${CH - 8}" text-anchor="end">${esc(pts[pts.length - 1].t)}</text>
+    <polygon points="${area}" fill="url(#fade)"/>
+    <polyline points="${line}" fill="none" stroke="var(--series-1)" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    <g id="crosshair" style="display:none">
+      <line id="chLine" y1="${PADT}" y2="${CH - PADB}" stroke="var(--baseline)" stroke-width="1"/>
+      <circle id="chDot" r="4" fill="var(--series-1)" stroke="var(--surface)" stroke-width="2"/>
+    </g>
+  </svg>
+  <div class="chart-tip" id="chartTip"></div>`;
+  const chgEl = document.getElementById("windowChg");
+  if (chgEl) {
+    const wchg = (vals[vals.length - 1] / vals[0] - 1) * 100;
+    chgEl.textContent = `${sign(wchg.toFixed(2))}% in view`;
+    chgEl.className = "zoom-hint " + (up ? "pos" : "neg");
+  }
+}
+
+function chartIndexFromEvent(e) {
+  const svg = document.getElementById("chartSvg");
+  if (!svg) return null;
+  const rect = svg.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * CW;
+  const n = chart.i1 - chart.i0;
+  const frac = Math.min(1, Math.max(0, (x - PADL) / (CW - PADL - PADR)));
+  return { local: Math.round(frac * n), frac, x };
+}
+
+function onChartMove(e) {
+  if (chart.dragging) {
+    const svg = document.getElementById("chartSvg");
+    const rect = svg.getBoundingClientRect();
+    const dxPx = (e.clientX - chart.dragX) / rect.width * CW;
+    const n = chart.dI1 - chart.dI0;
+    const dIdx = Math.round(dxPx / (CW - PADL - PADR) * n);
+    let i0 = chart.dI0 - dIdx, i1 = chart.dI1 - dIdx;
+    if (i0 < 0) { i1 -= i0; i0 = 0; }
+    if (i1 > chart.data.length - 1) { i0 -= (i1 - (chart.data.length - 1)); i1 = chart.data.length - 1; }
+    chart.i0 = Math.max(0, i0); chart.i1 = Math.min(chart.data.length - 1, i1);
+    drawChart();
+    return;
+  }
+  const hit = chartIndexFromEvent(e);
+  if (!hit) return;
+  const pts = chart.data.slice(chart.i0, chart.i1 + 1);
+  const p = pts[Math.min(hit.local, pts.length - 1)];
+  if (!p) return;
+  const vals = pts.map(q => q.c);
+  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const cx = PADL + (hit.local / (pts.length - 1)) * (CW - PADL - PADR);
+  const cy = PADT + (1 - (p.c - min) / span) * (CH - PADT - PADB);
+  const g = document.getElementById("crosshair");
+  g.style.display = "block";
+  const lineEl = document.getElementById("chLine");
+  lineEl.setAttribute("x1", cx); lineEl.setAttribute("x2", cx);
+  const dotEl = document.getElementById("chDot");
+  dotEl.setAttribute("cx", cx); dotEl.setAttribute("cy", cy);
+  const tip = document.getElementById("chartTip");
+  tip.style.display = "block";
+  tip.textContent = `${p.t} · ₹${fmtNum(p.c)}`;
+  const holder = document.getElementById("chartHolder");
+  const hr = holder.getBoundingClientRect();
+  let left = e.clientX - hr.left + 14;
+  if (left > hr.width - 130) left = e.clientX - hr.left - 130;
+  tip.style.left = left + "px";
+  tip.style.top = Math.max(0, e.clientY - hr.top - 34) + "px";
+}
+
+function onChartWheel(e) {
+  e.preventDefault();
+  const hit = chartIndexFromEvent(e);
+  if (!hit) return;
+  const n = chart.i1 - chart.i0 + 1;
+  const factor = e.deltaY < 0 ? 0.78 : 1.28;
+  const newN = Math.min(chart.data.length, Math.max(10, Math.round(n * factor)));
+  const cursorIdx = chart.i0 + hit.frac * (n - 1);
+  let i0 = Math.round(cursorIdx - hit.frac * (newN - 1));
+  let i1 = i0 + newN - 1;
+  if (i0 < 0) { i1 -= i0; i0 = 0; }
+  if (i1 > chart.data.length - 1) { i0 -= (i1 - (chart.data.length - 1)); i1 = chart.data.length - 1; }
+  chart.i0 = Math.max(0, i0); chart.i1 = i1;
+  drawChart();
+}
+
+function bindChartEvents() {
+  const holder = document.getElementById("chartHolder");
+  if (!holder) return;
+  holder.addEventListener("wheel", onChartWheel, { passive: false });
+  holder.addEventListener("mousemove", onChartMove);
+  holder.addEventListener("mousedown", e => {
+    chart.dragging = true; chart.dragX = e.clientX; chart.dI0 = chart.i0; chart.dI1 = chart.i1;
+    holder.classList.add("grabbing");
+  });
+  window.addEventListener("mouseup", () => { chart.dragging = false; holder.classList.remove("grabbing"); });
+  holder.addEventListener("mouseleave", () => {
+    const g = document.getElementById("crosshair"); if (g) g.style.display = "none";
+    const tip = document.getElementById("chartTip"); if (tip) tip.style.display = "none";
+  });
+  holder.addEventListener("dblclick", () => { chart.i0 = 0; chart.i1 = chart.data.length - 1; drawChart(); });
+}
+
+async function loadChart(sym, rng, quiet) {
+  chart.sym = sym; chart.range = rng;
+  document.querySelectorAll(".ranges button[data-r]").forEach(b =>
+    b.classList.toggle("active", b.dataset.r === rng));
+  const holder = document.getElementById("chartHolder");
+  if (!quiet && holder) holder.style.opacity = "0.45";
+  try {
+    const res = await fetch(`/api/chart/${encodeURIComponent(sym)}?range=${rng}`);
+    const d = await res.json();
+    if (d.error) return;
+    const keepZoomed = quiet && chart.i1 < chart.data.length - 1;
+    chart.data = d.points;
+    if (!keepZoomed) { chart.i0 = 0; chart.i1 = d.points.length - 1; }
+    else { chart.i1 = Math.min(chart.i1, d.points.length - 1); }
+    drawChart();
+    if (quiet && d.points.length) {
+      // live tick: refresh header price using last traded point
+      const last = d.points[d.points.length - 1].c;
+      const prev = window._stockPrevClose;
+      document.getElementById("priceBig").textContent = "₹" + fmtNum(last);
+      if (prev) {
+        const chg = (last / prev - 1) * 100;
+        const chip = document.getElementById("chgChip");
+        chip.textContent = sign(chg.toFixed(2)) + "%";
+        chip.className = "chg-chip " + cls(chg);
+      }
+    }
+  } finally {
+    if (holder) holder.style.opacity = "1";
+  }
+  setLiveMode(rng === "1D" && marketState === "open");
+}
+
+function setLiveMode(on) {
+  const badge = document.getElementById("liveBadge");
+  if (chart.timer) { clearInterval(chart.timer); chart.timer = null; }
+  if (badge) badge.classList.toggle("on", on);
+  if (on) {
+    chart.timer = setInterval(() => {
+      if (chart.sym && chart.range === "1D") loadChart(chart.sym, "1D", true);
+    }, 60_000);
+  }
+}
+
+/* ================= render ================= */
+function tile(label, value, sub = "", valueClass = "") {
+  return `<div class="tile"><div class="label">${label}</div>
+    <div class="value ${valueClass}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+function renderTiles() {
+  const el = document.getElementById("tiles");
+  const c = cfg || (lastScan && lastScan.config);
+  if (!c) { el.innerHTML = ""; return; }
+  let html = "";
+  if (lastScan) {
+    const n = lastScan.nifty;
+    html += tile("Nifty 50", fmtNum(n.level), `${sign(n.change_pct)}% · ${lastScan.generated_at}`, cls(n.change_pct)) +
+      tile("Index Trend", n.trend === "UP" ? "▲ UP" : "▼ DOWN",
+           n.trend === "UP" ? "longs favoured" : "shorts favoured", n.trend === "UP" ? "pos" : "neg");
+  }
+  html += tile("Capital", fmtINR(c.capital), "editable in ⚙ settings") +
+    tile("Risk / Trade", fmtINR(c.capital * c.risk_per_trade_pct / 100),
+         `${c.risk_per_trade_pct}% · SL ${c.stop_loss_pct}% · target ${c.target_pct}%`);
+  el.innerHTML = html;
+}
+
+function renderScan(d) {
+  if (!d) return;
+  lastScan = d;
+  renderTiles();
+  const card = document.getElementById("signalsCard");
+  if (!d.picks.length) {
+    card.innerHTML = `<div class="empty">No setups qualified${d.live ? " today" : " in the last session"}. Not trading is also a position — capital preserved.</div>`;
+    return;
+  }
+  const note = d.live ? "" :
+    `<div class="empty" style="padding:10px;border-bottom:1px solid var(--grid);font-size:12px">Market closed — preview from the last session. Gaps show 0 until the next open.</div>`;
+  card.innerHTML = note + `<table>
+    <thead><tr>
+      <th>Stock</th><th>Side</th><th class="num">Score</th><th class="num">RSI</th>
+      <th class="num">Vol×</th><th class="num">Gap%</th><th class="num">Entry</th>
+      <th class="num">Stop</th><th class="num">Target</th><th class="num">Qty</th><th>30d Trend</th>
+    </tr></thead>
+    <tbody>${d.picks.map(p => `<tr>
+      <td><div class="sym" onclick="searchStock('${p.symbol}')">${p.symbol}</div>
+          <div class="why-cell">${p.reasons.join(" · ")}</div></td>
+      <td><span class="badge ${p.side.toLowerCase()}">${p.side === "LONG" ? "▲ LONG" : "▼ SHORT"}</span></td>
+      <td class="num">${p.score}</td>
+      <td class="num">${p.rsi}</td>
+      <td class="num">${p.vol_ratio}</td>
+      <td class="num">${sign(p.gap_pct)}</td>
+      <td class="num">${fmtNum(p.entry)}</td>
+      <td class="num">${fmtNum(p.sl)}</td>
+      <td class="num">${fmtNum(p.target)}</td>
+      <td class="num">${p.qty}</td>
+      <td>${sparkline(p.spark)}</td>
+    </tr>`).join("")}</tbody>
+  </table>`;
+}
+
+function renderStock(s) {
+  const card = document.getElementById("stockCard");
+  const m = s.metrics;
+  window._stockPrevClose = m.prev_close;
+  const stat = (l, v) => `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`;
+  const p = s.plan;
+  const verdict = p.qualifies
+    ? `<span class="badge ${m.side.toLowerCase()}">${m.side === "LONG" ? "▲ LONG" : "▼ SHORT"} setup · score ${m.score}</span>
+       <span class="plan">Plan: entry ₹${fmtNum(p.entry)} · stop ₹${fmtNum(p.sl)} · target ₹${fmtNum(p.target)} · qty ${p.qty}</span>`
+    : `<span class="badge" style="color:var(--muted)">— NO EDGE right now (score ${m.score}, need 5+)</span>
+       <span class="plan">Scanner would skip this today. No setup ≠ bad stock — just no intraday edge.</span>`;
+  card.innerHTML = `
+    <div class="stock-head">
+      <span class="sym-big">${s.symbol}</span>
+      <span class="asof">NSE · ${s.as_of}</span>
+      <span class="live-badge" id="liveBadge"><span class="ld"></span>LIVE</span>
+      <span class="price-big" id="priceBig">₹${fmtNum(s.price)}</span>
+      <span class="chg-chip ${cls(s.change_pct)}" id="chgChip">${sign(s.change_pct)}%</span>
+      <button class="xbtn" onclick="closeStock()" title="Close">✕</button>
+    </div>
+    <div class="ranges">
+      ${["1D","1W","1M","3M","1Y","5Y"].map(r =>
+        `<button data-r="${r}" onclick="loadChart('${s.symbol}','${r}')">${r}</button>`).join("")}
+      <span class="zoom-hint" id="windowChg"></span>
+      <span class="zoom-hint">scroll = zoom · drag = pan · double-click = reset</span>
+    </div>
+    <div class="stock-body">
+      <div class="chart-holder" id="chartHolder"><div class="empty">Loading chart…</div></div>
+      <div class="stats-grid">
+        ${stat("RSI (14)", m.rsi)}
+        ${stat("Volume ×avg", m.vol_ratio + "×")}
+        ${stat("SMA 20", "₹" + fmtNum(m.sma20))}
+        ${stat("SMA 50", "₹" + fmtNum(m.sma50))}
+        ${stat("Avg Daily Range", m.avg_range_pct + "%")}
+        ${stat("Gap Today", sign(m.gap_pct) + "%")}
+        ${stat("52W High", "₹" + fmtNum(s.year_high))}
+        ${stat("52W Low", "₹" + fmtNum(s.year_low))}
+      </div>
+    </div>
+    <div class="verdict">
+      ${verdict}
+      ${m.reasons.length ? `<div class="why">${m.reasons.join(" · ")} · Nifty ${s.nifty_trend}</div>` : ""}
+    </div>
+    <div class="stock-extra">
+      <button class="primary" id="aiBtn" onclick="runAI('${s.symbol}')">✨ AI Analysis</button>
+      <div class="ai-panel" id="aiPanel"></div>
+      <h3 style="margin-top:14px">📰 Latest News</h3>
+      <div id="newsList" style="font-size:12.5px;color:var(--muted)">Loading news…</div>
+    </div>`;
+  card.hidden = false;
+  bindChartEvents();
+  const defaultRange = marketState === "open" ? "1D" : "3M";
+  loadChart(s.symbol, defaultRange);
+  loadNews(s.symbol);
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeStock() {
+  setLiveMode(false);
+  document.getElementById("stockCard").hidden = true;
+}
+
+async function loadNews(sym) {
+  try {
+    const d = await (await fetch("/api/news/" + encodeURIComponent(sym))).json();
+    const el = document.getElementById("newsList");
+    if (!d.news || !d.news.length) { el.textContent = "No recent news found for this stock."; return; }
+    el.innerHTML = d.news.map(n => `<div class="news-item">
+      <a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a>
+      <div class="news-meta">${esc(n.publisher)}${n.time ? " · " + esc(n.time) : ""}</div>
+    </div>`).join("");
+  } catch (e) {
+    const el = document.getElementById("newsList");
+    if (el) el.textContent = "News load nahi hui.";
+  }
+}
+
+async function runAI(sym) {
+  const btn = document.getElementById("aiBtn");
+  const panel = document.getElementById("aiPanel");
+  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Analyzing…`;
+  panel.classList.add("show");
+  panel.innerHTML = `<div style="color:var(--muted)">Sab parameters + news padh ke analysis ban raha hai…</div>`;
+  try {
+    const d = await (await fetch("/api/ai/" + encodeURIComponent(sym))).json();
+    if (d.error) { panel.innerHTML = `⚠ ${esc(d.error)}`; return; }
+    const src = d.source === "claude"
+      ? `Claude AI · ${esc(d.model || "")}`
+      : `Rule-based analysis — ${esc(d.note || "")}`;
+    const html = esc(d.text)
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .split(/\n{2,}/).map(par => `<p>${par.replace(/\n/g, "<br>")}</p>`).join("");
+    panel.innerHTML = `<div class="ai-source">${src}</div>${html}`;
+  } catch (e) {
+    panel.innerHTML = `⚠ AI analysis failed: ${esc(e.message)}`;
+  } finally {
+    btn.disabled = false; btn.textContent = "✨ AI Analysis";
+  }
+}
+
+/* ================= movers ================= */
+function renderMovers(d) {
+  if (!d) return;
+  document.getElementById("moversStamp").textContent =
+    `${d.generated_at} · ${d.scanned} tradeable stocks (of ${d.universe} listed) · refreshed every scan`;
+  const card = document.getElementById("moversCard");
+  if (!d.movers || !d.movers.length) {
+    card.innerHTML = `<div class="empty">No movers found.</div>`;
+    return;
+  }
+  card.innerHTML = `<div style="max-height:560px;overflow-y:auto"><table>
+    <thead><tr>
+      <th class="num">#</th><th>Stock</th><th class="num">Price</th><th class="num">Chg%</th>
+      <th class="num">Vol×</th><th class="num">RSI</th><th class="num">Range%</th>
+      <th class="num">T/O ₹Cr</th><th class="num">vs 52wH</th><th>Bias</th><th class="num">Score</th><th>20d</th>
+    </tr></thead>
+    <tbody>${d.movers.map((r, i) => `<tr>
+      <td class="num" style="color:var(--muted)">${i + 1}</td>
+      <td><span class="sym" onclick="searchStock('${r.symbol}')">${r.symbol}</span>${r.exch === "BSE" ? ' <span style="font-size:9.5px;color:var(--muted);border:1px solid var(--grid);border-radius:4px;padding:0 4px">BSE</span>' : ""}</td>
+      <td class="num">${fmtNum(r.price)}</td>
+      <td class="num ${cls(r.chg_pct)}">${sign(r.chg_pct)}</td>
+      <td class="num">${r.vol_ratio}</td>
+      <td class="num">${r.rsi}</td>
+      <td class="num">${r.range_pct}</td>
+      <td class="num">${fmtNum(r.turnover_cr)}</td>
+      <td class="num">${sign(r.from_high_pct)}%</td>
+      <td><span class="badge ${r.bias.toLowerCase()}">${r.bias === "LONG" ? "▲ LONG" : r.bias === "SHORT" ? "▼ SHORT" : "◆ MIXED"}</span></td>
+      <td class="num" style="font-weight:650">${r.score}</td>
+      <td>${sparkline(r.spark, 80, 26)}</td>
+    </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+async function loadMovers(force) {
+  const btn = document.getElementById("moversBtn");
+  if (force) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spin"></span>Scanning NSE+BSE (~7000 stocks, 5–10 min)…`;
+    document.getElementById("moversCard").innerHTML =
+      `<div class="empty">Poora Indian market scan ho raha hai — NSE + BSE ~7000 stocks ka 1 saal ka data. 5–10 minute lagenge, chai le aao ☕</div>`;
+  }
+  try {
+    const url = force ? "/api/movers?force=1" : "/api/movers?cached_only=1";
+    const d = await (await fetch(url)).json();
+    if (d && !d.error) renderMovers(d);
+  } catch (e) {
+    if (force) document.getElementById("moversCard").innerHTML = `<div class="empty">⚠ Scan failed: ${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = "🔥 Scan Full Market";
+  }
+}
+
+/* ================= report ================= */
+function renderReport(r) {
+  const tilesEl = document.getElementById("reportTiles");
+  const tradesEl = document.getElementById("tradesCard");
+  const eqCard = document.getElementById("equityCard");
+  if (!r || !r.summary) {
+    tilesEl.innerHTML = "";
+    eqCard.style.display = "none";
+    return;
+  }
+  const s = r.summary;
+  tilesEl.innerHTML =
+    tile("Closed Trades", s.trades, `${r.open ? r.open.length : 0} still open`) +
+    tile("Win Rate", s.win_rate + "%", `${s.wins} wins / ${s.trades - s.wins} losses`, s.win_rate >= 50 ? "pos" : "neg") +
+    tile("Net P&L", fmtINR(s.net_pnl), `${sign(s.net_pct)}% of capital, after costs`, cls(s.net_pnl)) +
+    tile("Avg / Trade", fmtINR(s.avg_per_trade), "", cls(s.avg_per_trade));
+  eqCard.style.display = "block";
+  document.getElementById("equityChart").innerHTML = equityChart(s.equity_curve);
+  tradesEl.innerHTML = `<table>
+    <thead><tr><th>Date</th><th>Stock</th><th>Side</th><th class="num">Entry</th>
+      <th class="num">Exit</th><th class="num">Qty</th><th class="num">P&amp;L</th></tr></thead>
+    <tbody>${r.trades.slice().reverse().map(t => `<tr>
+      <td>${t.date}</td>
+      <td><span class="sym" onclick="searchStock('${t.symbol}')">${t.symbol}</span></td>
+      <td><span class="badge ${t.side.toLowerCase()}">${t.side === "LONG" ? "▲ LONG" : "▼ SHORT"}</span></td>
+      <td class="num">${fmtNum(+t.entry)}</td>
+      <td class="num">${fmtNum(+t.exit_price)}</td>
+      <td class="num">${t.qty}</td>
+      <td class="num ${cls(+t.pnl)}">${fmtINR(+t.pnl)}</td>
+    </tr>`).join("")}</tbody>
+  </table>`;
+}
+
+/* ================= actions ================= */
+async function searchStock(symbol) {
+  const box = document.getElementById("searchBox");
+  const sym = (symbol || box.value).trim().toUpperCase();
+  if (!sym) return;
+  box.value = sym;
+  setLiveMode(false);
+  const btn = document.getElementById("searchBtn");
+  const card = document.getElementById("stockCard");
+  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Loading`;
+  card.hidden = false;
+  card.innerHTML = `<div class="empty">Fetching ${esc(sym)} from NSE…</div>`;
+  try {
+    const res = await fetch("/api/stock/" + encodeURIComponent(sym));
+    const d = await res.json();
+    if (d.error) card.innerHTML = `<div class="empty">⚠ ${esc(d.error)}</div>`;
+    else renderStock(d);
+  } catch (e) {
+    card.innerHTML = `<div class="empty">⚠ Lookup failed: ${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = "View Stock";
+  }
+}
+
+async function runScan() {
+  const btn = document.getElementById("scanBtn");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span>Scanning full market…`;
+  try {
+    const res = await fetch("/api/scan", { method: "POST" });
+    const d = await res.json();
+    if (d.error) alert("Scan failed: " + d.error);
+    else renderScan(d);
+  } catch (e) {
+    alert("Scan failed: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Run Scan";
+  }
+}
+
+async function loadReport(manual) {
+  const btn = document.getElementById("reportBtn");
+  if (manual) { btn.disabled = true; btn.textContent = "Evaluating…"; }
+  try {
+    const res = await fetch("/api/report");
+    const r = await res.json();
+    if (!r.error) renderReport(r);
+  } catch (e) { /* silent on load */ }
+  finally { btn.disabled = false; btn.textContent = "Refresh Report"; }
+}
+
+function toggleSettings() {
+  const p = document.getElementById("settingsPanel");
+  p.hidden = !p.hidden;
+  if (!p.hidden && cfg) fillSettings();
+}
+
+function fillSettings() {
+  document.getElementById("cfgCapital").value = cfg.capital;
+  document.getElementById("cfgRisk").value = cfg.risk_per_trade_pct;
+  document.getElementById("cfgSL").value = cfg.stop_loss_pct;
+  document.getElementById("cfgTarget").value = cfg.target_pct;
+}
+
+async function saveSettings() {
+  const body = {
+    capital: +document.getElementById("cfgCapital").value,
+    risk_per_trade_pct: +document.getElementById("cfgRisk").value,
+    stop_loss_pct: +document.getElementById("cfgSL").value,
+    target_pct: +document.getElementById("cfgTarget").value,
+  };
+  const res = await fetch("/api/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const d = await res.json();
+  if (d.error) { alert(d.error); return; }
+  cfg = d;
+  renderTiles();
+  document.getElementById("settingsPanel").hidden = true;
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch("/api/status");
+    const s = await res.json();
+    if (s.error) return;
+    const wasOpen = marketState === "open";
+    marketState = s.state;
+    document.getElementById("dot").className = "dot " + s.state;
+    document.getElementById("statusLabel").textContent = s.label;
+    document.getElementById("statusDetail").textContent = "· " + s.detail;
+    // market just opened/closed while a 1D chart is showing -> flip live mode
+    if (chart.sym && chart.range === "1D" && wasOpen !== (s.state === "open")) {
+      setLiveMode(s.state === "open");
+    }
+  } catch (e) {}
+}
+
+/* ================= init ================= */
+(async function init() {
+  pollStatus();
+  setInterval(pollStatus, 60_000);
+  try { cfg = await (await fetch("/api/config")).json(); fillSettings(); } catch (e) {}
+  fetch("/api/symbols").then(r => r.json()).then(syms => {
+    if (Array.isArray(syms)) {
+      document.getElementById("symList").innerHTML = syms.map(s => `<option value="${s}">`).join("");
+      document.getElementById("searchBox").placeholder =
+        `Search ANY NSE stock — ${syms.length} listed companies loaded…`;
+    }
+  }).catch(() => {});
+  try {
+    const d = await (await fetch("/api/last")).json();
+    if (d) renderScan(d); else renderTiles();
+  } catch (e) { renderTiles(); }
+  loadReport(false);
+  loadMovers(false);
+  const hash = decodeURIComponent(location.hash.slice(1));
+  if (hash) searchStock(hash);
+})();
+</script>
+</body>
+</html>
