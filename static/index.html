@@ -649,6 +649,7 @@ function renderStock(s) {
   const defaultRange = marketState === "open" ? "1D" : "3M";
   loadChart(s.symbol, defaultRange);
   loadNews(s.symbol);
+  loadPrediction(s.symbol);  // prefetch in background — tab opens instantly
   card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -658,7 +659,7 @@ function closeStock() {
 }
 
 /* ================= market / prediction tabs ================= */
-let predictLoadedFor = null;
+let predictLoadedFor = null, predictLoadingFor = null;
 
 function switchView(v) {
   const market = v === "market";
@@ -667,20 +668,26 @@ function switchView(v) {
   document.getElementById("rangesRow").style.display = market ? "" : "none";
   document.getElementById("chartHolder").hidden = !market;
   document.getElementById("predictHolder").hidden = market;
-  if (!market && predictLoadedFor !== chart.sym) loadPrediction(chart.sym);
+  if (!market && predictLoadedFor !== chart.sym && predictLoadingFor !== chart.sym)
+    loadPrediction(chart.sym);
 }
 
 async function loadPrediction(sym) {
+  if (predictLoadingFor === sym || predictLoadedFor === sym) return;
+  predictLoadingFor = sym;
   const holder = document.getElementById("predictHolder");
   holder.innerHTML = `<div class="empty"><span class="spin" style="border-color:var(--muted);border-top-color:var(--series-1)"></span>
     Saare factors (RSI, trend, volume, 52w, momentum, Nifty, news sentiment) combine ho rahe hain…</div>`;
   try {
     const d = await (await fetch("/api/predict/" + encodeURIComponent(sym))).json();
+    if (chart.sym !== sym) return;  // user opened another stock meanwhile
     if (d.error) { holder.innerHTML = `<div class="empty">⚠ ${esc(d.error)}</div>`; return; }
     predictLoadedFor = sym;
     renderPrediction(d, holder);
   } catch (e) {
     holder.innerHTML = `<div class="empty">⚠ Prediction failed: ${esc(e.message)}</div>`;
+  } finally {
+    if (predictLoadingFor === sym) predictLoadingFor = null;
   }
 }
 

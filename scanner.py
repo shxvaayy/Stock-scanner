@@ -737,17 +737,28 @@ def top_movers(force=False):
 
 # ---------------- News ----------------
 
-_name_cache = {}
+_NAME_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "name_cache.json")
+_name_cache = None
 
 
 def company_name(sym):
-    """Long company name from Yahoo (cached) — makes news search relevant."""
+    """Long company name from Yahoo (memory + disk cached) — news relevance."""
+    global _name_cache
+    if _name_cache is None:
+        try:
+            _name_cache = json.load(open(_NAME_CACHE_FILE))
+        except Exception:
+            _name_cache = {}
     if sym not in _name_cache:
         try:
             info = yf.Ticker(yahoo_symbol(sym)).info or {}
             _name_cache[sym] = info.get("longName") or info.get("shortName") or ""
         except Exception:
             _name_cache[sym] = ""
+        try:
+            json.dump(_name_cache, open(_NAME_CACHE_FILE, "w"))
+        except OSError:
+            pass
     return _name_cache[sym]
 
 
@@ -933,6 +944,22 @@ def _feature_matrix(df, nifty_up_series):
     return feats, target
 
 
+_predict_cache = {}
+_nifty_cache = {"ts": 0, "series": None}
+
+
+def _nifty_up_series():
+    """Nifty above/below 50-DMA as +1/-1 daily series (cached 15 min)."""
+    now_ts = datetime.now(IST).timestamp()
+    if _nifty_cache["series"] is None or now_ts - _nifty_cache["ts"] > 900:
+        ndf = flatten(yf.download("^NSEI", period="2y", interval="1d",
+                                  auto_adjust=True, progress=False)).dropna()
+        _nifty_cache["series"] = ((ndf["Close"] > ndf["Close"].rolling(50).mean())
+                                  .astype(float) * 2 - 1)
+        _nifty_cache["ts"] = now_ts
+    return _nifty_cache["series"]
+
+
 def _ridge_fit(X, y, lam=8.0):
     """Ridge regression via normal equations — no sklearn needed."""
     import numpy as np
@@ -952,24 +979,36 @@ def predict_series(symbol, horizon=15):
     refitted on everything for the live forecast. The uncertainty band comes
     from the empirical quantiles of the model's own residuals. News sentiment
     is applied as a small post-model adjustment. Educational — NOT a guarantee.
+
+    Snapshot, 2y history, Nifty regime and news are fetched in PARALLEL and
+    the final result is cached ~10 min, so predictions land without delay.
     """
     import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
 
-    snap = analyze_stock(symbol)
+    sym = _clean_symbol(symbol)
+    now_ts = datetime.now(IST).timestamp()
+    cached = _predict_cache.get(sym)
+    if cached and now_ts - cached[0] < 600:
+        return cached[1]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_snap = pool.submit(analyze_stock, sym)
+        f_df = pool.submit(lambda: flatten(yf.download(
+            yahoo_symbol(sym), period="2y", interval="1d",
+            auto_adjust=True, progress=False)).dropna())
+        f_news = pool.submit(stock_news, sym)
+        f_nifty = pool.submit(_nifty_up_series)
+        snap = f_snap.result()
+        df = f_df.result()
+        news = f_news.result()
+        nifty_up = f_nifty.result()
+
     m = snap["metrics"]
     price = snap["price"]
-    news = stock_news(symbol)
     senti, pos_hits, neg_hits = news_sentiment(news["news"])
-
-    sym = snap["symbol"]
-    df = flatten(yf.download(yahoo_symbol(sym), period="2y", interval="1d",
-                             auto_adjust=True, progress=False)).dropna()
     if len(df) < 130:
         raise ValueError(f"Not enough history for a statistical model on '{sym}'")
-
-    ndf = flatten(yf.download("^NSEI", period="2y", interval="1d",
-                              auto_adjust=True, progress=False)).dropna()
-    nifty_up = ((ndf["Close"] > ndf["Close"].rolling(50).mean()).astype(float) * 2 - 1)
 
     feats, target = _feature_matrix(df, nifty_up)
     valid = feats.dropna().index.intersection(target.dropna().index)
@@ -1048,7 +1087,7 @@ def predict_series(symbol, horizon=15):
         points.append({"d": f"+{t}d", "mid": round(mid, 2),
                        "lo": round(mid - lo_band, 2), "hi": round(mid + hi_band, 2)})
 
-    return {
+    result = {
         "symbol": sym,
         "last_close": price,
         "as_of": snap["as_of"],
@@ -1068,6 +1107,8 @@ def predict_series(symbol, horizon=15):
                        "are barely better than a coin flip day-to-day — the "
                        "shaded band is the honest forecast, not the line."),
     }
+    _predict_cache[sym] = (now_ts, result)
+    return result
 
 
 # ---------------- AI analysis ----------------
