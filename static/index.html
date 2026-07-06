@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoTheta — Trading Bot Dashboard</title>
+<style>
+  :root {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #fff; --ink-2: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --border: rgba(255,255,255,.10);
+    --accent: #3987e5; --good: #0ca30c; --bad: #e66767; --amber: #fab219;
+    --hover: rgba(137,135,129,.10);
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink-2:#52514e;
+      --muted:#898781; --grid:#e1e0d9; --border:rgba(11,11,11,.10);
+      --accent:#2a78d6; --good:#006300; --bad:#d03b3b; --hover:rgba(137,135,129,.07); }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--page); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 22px; max-width: 1180px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { font-size: 20px; font-weight: 750; letter-spacing: -.01em; }
+  h1 .theta { background: linear-gradient(120deg, #7c3aed, #3987e5); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border);
+    background: var(--surface); border-radius: 999px; padding: 5px 14px 5px 10px; font-size: 12.5px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .dot.on { background: var(--good); animation: pulse 1.8s infinite; }
+  .dot.off { background: var(--bad); }
+  .dot.open { background: var(--good); animation: pulse 2s infinite; }
+  .dot.pre { background: var(--amber); }
+  .dot.closed { background: var(--bad); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(12,163,12,.45)} 70%{box-shadow:0 0 0 7px rgba(12,163,12,0)} 100%{box-shadow:0 0 0 0 rgba(12,163,12,0)} }
+  .actions { margin-left: auto; display: flex; gap: 8px; }
+  button { font: 650 13px system-ui, sans-serif; padding: 10px 20px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+    cursor: pointer; transition: transform .15s, filter .15s; }
+  button:hover { filter: brightness(1.12); transform: translateY(-1px); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .btn-start { background: linear-gradient(120deg, #0ca30c, #0a8a3c); border: none; color: #fff;
+    box-shadow: 0 4px 16px rgba(12,163,12,.3); }
+  .btn-stop { background: linear-gradient(120deg, #d03b3b, #a32222); border: none; color: #fff;
+    box-shadow: 0 4px 16px rgba(208,59,59,.3); }
+  .banner { background: rgba(250,178,25,.1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 14px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; animation: rise .4s ease both; }
+  .tile .label { font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+  .tile .value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .tile .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+  section { margin-bottom: 24px; }
+  h2 { font-size: 15px; font-weight: 680; margin-bottom: 10px; }
+  h2 .hint { font-weight: 400; font-size: 12.5px; color: var(--muted); margin-left: 8px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--grid); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--grid); font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: var(--hover); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { padding: 26px; text-align: center; color: var(--muted); }
+  .badge { font-size: 11px; font-weight: 750; padding: 2px 9px; border-radius: 999px; }
+  .badge.bull { background: rgba(12,163,12,.12); color: var(--good); }
+  .badge.bear { background: rgba(230,103,103,.12); color: var(--bad); }
+  .badge.crash { background: rgba(230,103,103,.25); color: var(--bad); }
+  .badge.buy { color: var(--good); } .badge.sell, .badge.exit { color: var(--bad); }
+  .logbox { font: 11.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 14px 16px;
+    max-height: 320px; overflow-y: auto; white-space: pre-wrap; color: var(--ink-2); }
+  .thought { padding: 8px 14px; border-bottom: 1px dashed var(--grid); font-size: 12.5px; animation: rise .3s ease both; }
+  .thought:last-child { border-bottom: none; }
+  .thought .meta { color: var(--muted); font-size: 11px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.35);
+    border-top-color: #fff; border-radius: 50%; animation: r .7s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  select { background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 10px; font: 600 12.5px system-ui, sans-serif; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  svg text { font: 11px system-ui, sans-serif; fill: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="theta">Auto</span>Theta <span style="font-weight:400;font-size:13px;color:var(--muted)">paper trading bot</span></h1>
+  <span class="pill"><span class="dot" id="botDot"></span><b id="botState">…</b></span>
+  <span class="pill"><span class="dot" id="mktDot"></span><span id="mktState">…</span></span>
+  <span class="pill" id="regimePill" style="display:none">Regime: <span class="badge" id="regimeBadge"></span></span>
+  <div class="actions">
+    <button class="btn-start" id="startBtn" onclick="botCtl('start')">▶ Start Bot</button>
+    <button class="btn-stop" id="stopBtn" onclick="botCtl('stop')">■ Stop Bot</button>
+  </div>
+</header>
+
+<div class="banner">⚠ Paper trading — real market data, simulated money. Signals are hypotheses, not guarantees. Validate 30+ sessions before considering real capital.</div>
+
+<div class="tiles" id="tiles"></div>
+
+<section>
+  <h2>Equity Curve <span class="hint">cumulative paper P&amp;L across sessions, after costs</span></h2>
+  <div class="card" style="padding:16px" id="equityCard"><div class="empty">Loading…</div></div>
+</section>
+
+<section>
+  <h2>Trades <span class="hint">entries &amp; exits with reasons</span>
+    <select id="daySel" onchange="loadDay()" style="margin-left:10px"></select>
+  </h2>
+  <div class="card" id="tradesCard"><div class="empty">Loading…</div></div>
+</section>
+
+<div class="grid2">
+  <section>
+    <h2>Bot Thoughts <span class="hint">live decision journal — why it did or didn't trade</span></h2>
+    <div class="card" id="thoughtsCard" style="max-height:380px;overflow-y:auto"><div class="empty">No thoughts yet today.</div></div>
+  </section>
+  <section>
+    <h2>Console Log <span class="hint">raw bot output</span></h2>
+    <div class="card"><div class="logbox" id="logBox">No log yet.</div></div>
+  </section>
+</div>
+
+<footer>AutoTheta v3.0 · regime-adaptive · risk caps hard-coded · dashboard auto-refreshes every 15s while the bot runs</footer>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtINR = v => (v < 0 ? "-" : "") + "₹" + Math.abs(Math.round(v)).toLocaleString("en-IN");
+const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
+let status = null, selectedDay = null;
+
+async function j(url, opts) { return (await fetch(url, opts)).json(); }
+
+async function refreshStatus() {
+  status = await j("/api/status");
+  const bd = document.getElementById("botDot"), bs = document.getElementById("botState");
+  bd.className = "dot " + (status.bot_running ? "on" : "off");
+  bs.textContent = status.bot_running ? "Bot running · pid " + status.pid : "Bot stopped";
+  const md = document.getElementById("mktDot");
+  md.className = "dot " + status.market;
+  document.getElementById("mktState").textContent = status.market_detail;
+  document.getElementById("startBtn").style.display = status.bot_running ? "none" : "";
+  document.getElementById("stopBtn").style.display = status.bot_running ? "" : "none";
+  if (status.regime) {
+    document.getElementById("regimePill").style.display = "";
+    const rb = document.getElementById("regimeBadge");
+    rb.textContent = status.regime;
+    rb.className = "badge " + status.regime.toLowerCase();
+  }
+}
+
+async function botCtl(action) {
+  const btn = document.getElementById(action === "start" ? "startBtn" : "stopBtn");
+  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>` + (action === "start" ? "Starting…" : "Stopping…");
+  try {
+    const r = await j("/api/bot/" + action, { method: "POST" });
+    if (!r.ok) alert(r.error || "Failed");
+    else if (r.note) console.log(r.note);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = action === "start" ? "▶ Start Bot" : "■ Stop Bot";
+    setTimeout(refreshAll, 800);
+  }
+}
+
+async function loadDays() {
+  const d = await j("/api/days");
+  const days = d.days;
+  const sel = document.getElementById("daySel");
+  sel.innerHTML = days.slice().reverse().map(x =>
+    `<option value="${x.date}">${x.date}${x.closed ? ` · ${x.closed} trades` : ""}</option>`).join("") ||
+    `<option>${status?.today || ""}</option>`;
+  if (!selectedDay) selectedDay = days.length ? days[days.length - 1].date : status?.today;
+  sel.value = selectedDay;
+
+  // tiles: today + all-time
+  const today = days.find(x => x.date === status?.today) || { pnl: 0, closed: 0, wins: 0 };
+  const total = days.reduce((a, x) => a + x.pnl, 0);
+  const totClosed = days.reduce((a, x) => a + x.closed, 0);
+  const totWins = days.reduce((a, x) => a + x.wins, 0);
+  const tile = (l, v, s, c) => `<div class="tile"><div class="label">${l}</div><div class="value ${c || ""}">${v}</div><div class="sub">${s || ""}</div></div>`;
+  document.getElementById("tiles").innerHTML =
+    tile("Capital", fmtINR(d.capital), "paper allocation") +
+    tile("Today P&L", fmtINR(today.pnl), `${today.closed} closed trades`, cls(today.pnl)) +
+    tile("All-time P&L", fmtINR(total), `${((total / d.capital) * 100).toFixed(2)}% of capital`, cls(total)) +
+    tile("Win rate", totClosed ? Math.round(totWins / totClosed * 100) + "%" : "—", `${totWins}/${totClosed} closed`, totClosed && totWins / totClosed >= .5 ? "pos" : "") +
+    tile("Sessions", String(days.length), "days with logs");
+
+  drawEquity(days, d.capital);
+}
+
+function drawEquity(days, capital) {
+  const card = document.getElementById("equityCard");
+  const withTrades = days.filter(x => x.closed > 0);
+  if (withTrades.length < 1) { card.innerHTML = `<div class="empty">No closed trades yet — the curve appears after the bot's first session with trades.</div>`; return; }
+  const W = 1080, H = 220, PL = 62, PR = 16, PT = 14, PB = 28;
+  let run = 0;
+  const pts = [{ d: "start", v: 0 }, ...withTrades.map(x => ({ d: x.date, v: (run += x.pnl) }))];
+  const vals = pts.map(p => p.v);
+  const min = Math.min(0, ...vals), max = Math.max(0, ...vals), span = (max - min) || 1;
+  const px = i => PL + (i / (pts.length - 1)) * (W - PL - PR);
+  const py = v => PT + (1 - (v - min) / span) * (H - PT - PB);
+  const line = pts.map((p, i) => `${px(i).toFixed(1)},${py(p.v).toFixed(1)}`).join(" ");
+  const up = vals[vals.length - 1] >= 0;
+  const col = up ? "var(--good)" : "var(--bad)";
+  card.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%">
+    <line x1="${PL}" y1="${py(0)}" x2="${W - PR}" y2="${py(0)}" stroke="var(--grid)"/>
+    <text x="${PL - 8}" y="${py(max) + 4}" text-anchor="end">${fmtINR(max)}</text>
+    <text x="${PL - 8}" y="${py(0) + 4}" text-anchor="end">₹0</text>
+    ${min < 0 ? `<text x="${PL - 8}" y="${py(min) + 4}" text-anchor="end">${fmtINR(min)}</text>` : ""}
+    <text x="${PL}" y="${H - 8}">${esc(pts[1]?.d || "")}</text>
+    <text x="${W - PR}" y="${H - 8}" text-anchor="end">${esc(pts[pts.length - 1].d)}</text>
+    <polyline points="${line}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${pts.map((p, i) => i === 0 ? "" : `<circle cx="${px(i).toFixed(1)}" cy="${py(p.v).toFixed(1)}" r="3.5" fill="${col}" stroke="var(--surface)" stroke-width="2"><title>${esc(p.d)}: cumulative ${fmtINR(p.v)}</title></circle>`).join("")}
+  </svg>`;
+}
+
+async function loadDay() {
+  selectedDay = document.getElementById("daySel").value;
+  const [t, th, lg] = await Promise.all([
+    j("/api/trades?date=" + selectedDay),
+    j("/api/thoughts?date=" + selectedDay),
+    j("/api/logs?date=" + selectedDay),
+  ]);
+  const card = document.getElementById("tradesCard");
+  if (!t.trades.length) card.innerHTML = `<div class="empty">No trades on ${esc(t.date)}.</div>`;
+  else card.innerHTML = `<div style="max-height:340px;overflow-y:auto"><table>
+    <thead><tr><th>Time</th><th>Action</th><th>Stock</th><th class="num">Qty</th><th class="num">Price</th><th class="num">RSI</th><th class="num">Stop</th><th class="num">P&amp;L</th><th>Reason</th></tr></thead>
+    <tbody>${t.trades.map(r => {
+      const pnl = parseFloat((r["P&L"] || "").replace(/,/g, ""));
+      return `<tr>
+      <td>${esc(r.Time)}</td>
+      <td><span class="badge ${esc((r.Action || "").toLowerCase())}">${esc(r.Action)}</span></td>
+      <td><b>${esc(r.Stock)}</b></td>
+      <td class="num">${esc(r.Qty)}</td>
+      <td class="num">${esc(r.Price)}</td>
+      <td class="num">${esc(r.RSI)}</td>
+      <td class="num">${esc(r.Stop_Loss)}</td>
+      <td class="num ${isNaN(pnl) ? "" : cls(pnl)}">${isNaN(pnl) ? "—" : fmtINR(pnl)}</td>
+      <td style="font-size:11.5px;color:var(--muted)">${esc(r.Reason)}</td>
+    </tr>`; }).join("")}</tbody></table></div>`;
+
+  const tc = document.getElementById("thoughtsCard");
+  if (!th.thoughts.length) tc.innerHTML = `<div class="empty">No decision journal for ${esc(th.date)}.</div>`;
+  else tc.innerHTML = th.thoughts.slice().reverse().map((x, i) => `
+    <div class="thought" style="animation-delay:${i * 30}ms">
+      <b>${esc(x.Stock)}</b> @ ${esc(x.Price)} — ${esc(x.Decision || x.Signal)}
+      <span class="badge ${esc((x.MarketRegime || "").toLowerCase())}">${esc(x.MarketRegime)}</span>
+      <div class="meta">${esc(x.Time)} · RSI ${esc(x["RSI(5)_5m"])} · ${esc(x.Reason)}</div>
+    </div>`).join("");
+
+  document.getElementById("logBox").textContent = lg.lines.length ? lg.lines.join("\n") : "No log for this day.";
+  const lb = document.getElementById("logBox"); lb.scrollTop = lb.scrollHeight;
+}
+
+async function refreshAll() {
+  await refreshStatus();
+  await loadDays();
+  await loadDay();
+}
+
+refreshAll();
+setInterval(async () => {
+  await refreshStatus();
+  if (status?.bot_running && selectedDay === status.today) { await loadDays(); await loadDay(); }
+}, 15000);
+</script>
+</body>
+</html>

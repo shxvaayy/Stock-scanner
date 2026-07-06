@@ -11,3 +11,5 @@ pycryptodome==3.21.0
 websocket-client==1.8.0
 logzero==1.7.0
 PyYAML==6.0.2
+flask==3.1.*
+gunicorn==23.*
