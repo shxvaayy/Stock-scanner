@@ -118,9 +118,11 @@
   .chart-tip {
     position: absolute; pointer-events: none; display: none;
     background: var(--ink); color: var(--page); font: 600 11.5px system-ui, sans-serif;
-    padding: 4px 9px; border-radius: 7px; white-space: nowrap; z-index: 5;
-    font-variant-numeric: tabular-nums;
+    padding: 5px 10px; border-radius: 7px; white-space: nowrap; z-index: 5;
+    font-variant-numeric: tabular-nums; line-height: 1.5;
   }
+  .chart-tip .tp { color: #7ee27e; } .chart-tip .tn { color: #ff9a9a; }
+  .ranges button[data-cs] { font-size: 11.5px; padding: 5px 11px; }
   .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-content: start; }
   .stat { border: 1px solid var(--grid); border-radius: 9px; padding: 8px 12px; }
   .stat .label { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
@@ -283,12 +285,12 @@
 <div class="tiles" id="tiles"></div>
 
 <section>
-  <h2>Top 60 Market Movers <span class="hint">poora Indian market (NSE + BSE, ~7000 stocks) — activity score se ranked: volume surge, move size, RSI extremes, 52w breakouts, liquidity</span></h2>
+  <h2>Top 60 Market Movers <span class="hint">entire Indian market (NSE + BSE, ~7000 stocks) — ranked by activity score: volume surge, move size, RSI extremes, 52w breakouts, liquidity</span></h2>
   <div style="margin-bottom:10px; display:flex; gap:10px; align-items:center;">
     <button class="primary" id="moversBtn" onclick="loadMovers(true)">🔥 Scan Full Market</button>
     <span class="hint" id="moversStamp" style="font-size:12px;color:var(--muted)"></span>
   </div>
-  <div class="card" id="moversCard"><div class="empty">Full-market scan NSE + BSE ke ~7000 stocks download karta hai — 5–10 minute lagte hain. Result 10 min cache hota hai. Score = activity ranking, profit ki guarantee nahi.</div></div>
+  <div class="card" id="moversCard"><div class="empty">A full-market scan downloads 1 year of data for ~7000 NSE + BSE stocks and takes 5–10 minutes. Results are cached for 10 minutes. Score = activity ranking, not a profit guarantee.</div></div>
 </section>
 
 <section>
@@ -360,38 +362,102 @@ function equityChart(curve) {
 
 /* ================= main interactive chart ================= */
 const CW = 760, CH = 290, PADL = 56, PADR = 14, PADT = 14, PADB = 26;
-const chart = { sym: null, range: "3M", data: [], i0: 0, i1: 0, timer: null, dragging: false, dragX: 0, dI0: 0, dI1: 0 };
+const chart = { sym: null, range: "3M", style: "candle", data: [], i0: 0, i1: 0, timer: null, dragging: false, dragX: 0, dI0: 0, dI1: 0 };
 
 function drawChart() {
   const holder = document.getElementById("chartHolder");
   if (!holder || chart.data.length < 2) return;
   const pts = chart.data.slice(chart.i0, chart.i1 + 1);
+  const hasOHLC = pts[0].o != null && pts[0].h != null;
+  const candleMode = chart.style === "candle" && hasOHLC;
+  const VOLH = pts[0].v != null ? 44 : 0;               // volume strip height
+  const plotBot = CH - PADB - VOLH;
+
   const vals = pts.map(p => p.c);
-  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const min = candleMode ? Math.min(...pts.map(p => p.l)) : Math.min(...vals);
+  const max = candleMode ? Math.max(...pts.map(p => p.h)) : Math.max(...vals);
+  const span = (max - min) || 1;
   const px = i => PADL + (i / (pts.length - 1)) * (CW - PADL - PADR);
-  const py = v => PADT + (1 - (v - min) / span) * (CH - PADT - PADB);
-  const line = vals.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
-  const area = `${PADL},${CH - PADB} ${line} ${(CW - PADR).toFixed(1)},${CH - PADB}`;
+  const py = v => PADT + (1 - (v - min) / span) * (plotBot - PADT);
+  chart._scale = { min, max, plotBot };                  // crosshair reuses this
+
   const mid = Math.floor(pts.length / 2);
   const up = vals[vals.length - 1] >= vals[0];
+  const last = pts[pts.length - 1];
+
+  // grid: 4 horizontal levels
+  let grid = "";
+  for (let g = 0; g <= 3; g++) {
+    const v = min + (span * g) / 3;
+    grid += `<line x1="${PADL}" y1="${py(v)}" x2="${CW - PADR}" y2="${py(v)}" stroke="var(--grid)" ${g % 3 ? 'stroke-dasharray="3 4"' : ""}/>
+      <text x="${PADL - 8}" y="${py(v) + 4}" text-anchor="end">${fmtNum(v.toFixed(v < 100 ? 1 : 0))}</text>`;
+  }
+
+  // volume bars
+  let volBars = "";
+  if (VOLH) {
+    const vmax = Math.max(...pts.map(p => p.v || 0)) || 1;
+    const bw = Math.max(1, Math.min(13, ((CW - PADL - PADR) / pts.length) * 0.66));
+    volBars = pts.map((p, i) => {
+      const h = ((p.v || 0) / vmax) * (VOLH - 8);
+      const rising = p.o != null ? p.c >= p.o : (i > 0 ? p.c >= pts[i-1].c : true);
+      return `<rect x="${(px(i) - bw / 2).toFixed(1)}" y="${(CH - PADB - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}"
+        fill="${rising ? "var(--good)" : "var(--bad)"}" opacity="0.35"/>`;
+    }).join("");
+  }
+
+  // price series: candles or line
+  let series = "";
+  if (candleMode) {
+    const bw = Math.max(1.4, Math.min(14, ((CW - PADL - PADR) / pts.length) * 0.66));
+    series = pts.map((p, i) => {
+      const rising = p.c >= p.o;
+      const col = rising ? "var(--good)" : "var(--bad)";
+      const x = px(i), yO = py(p.o), yC = py(p.c);
+      const bodyY = Math.min(yO, yC), bodyH = Math.max(Math.abs(yC - yO), 1.1);
+      return `<line x1="${x.toFixed(1)}" y1="${py(p.h).toFixed(1)}" x2="${x.toFixed(1)}" y2="${py(p.l).toFixed(1)}" stroke="${col}" stroke-width="1"/>
+        <rect x="${(x - bw / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${bw.toFixed(1)}" height="${bodyH.toFixed(1)}" fill="${col}" rx="0.6"/>`;
+    }).join("");
+  } else {
+    const line = vals.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+    const area = `${PADL},${plotBot} ${line} ${(CW - PADR).toFixed(1)},${plotBot}`;
+    series = `<polygon points="${area}" fill="url(#fade)"/>
+      <polyline points="${line}" fill="none" stroke="var(--series-1)" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+
+  // SMA20 overlay (daily/weekly ranges — needs enough history in-window)
+  let smaLine = "", smaLegend = "";
+  if (["3M", "1Y", "5Y"].includes(chart.range) && chart.data.length >= 25) {
+    const closes = chart.data.map(p => p.c);
+    const smaPts = [];
+    for (let i = chart.i0; i <= chart.i1; i++) {
+      if (i < 19) continue;
+      let s = 0; for (let k = i - 19; k <= i; k++) s += closes[k];
+      const v = s / 20;
+      if (v >= min && v <= max) smaPts.push(`${px(i - chart.i0).toFixed(1)},${py(v).toFixed(1)}`);
+    }
+    if (smaPts.length > 1) {
+      smaLine = `<polyline points="${smaPts.join(" ")}" fill="none" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="5 4" opacity="0.9"/>`;
+      smaLegend = `<text x="${CW - PADR}" y="${PADT + 4}" text-anchor="end" style="fill:var(--amber)">— SMA 20</text>`;
+    }
+  }
+
   holder.innerHTML = `
   <svg id="chartSvg" viewBox="0 0 ${CW} ${CH}" width="100%" role="img" aria-label="price chart">
     <defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="var(--series-1)" stop-opacity="0.22"/>
       <stop offset="100%" stop-color="var(--series-1)" stop-opacity="0"/>
     </linearGradient></defs>
-    <line x1="${PADL}" y1="${py(min)}" x2="${CW - PADR}" y2="${py(min)}" stroke="var(--grid)"/>
-    <line x1="${PADL}" y1="${py(max)}" x2="${CW - PADR}" y2="${py(max)}" stroke="var(--grid)"/>
-    <line x1="${PADL}" y1="${py((min+max)/2)}" x2="${CW - PADR}" y2="${py((min+max)/2)}" stroke="var(--grid)" stroke-dasharray="3 4"/>
-    <text x="${PADL - 8}" y="${py(max) + 4}" text-anchor="end">${fmtNum(max)}</text>
-    <text x="${PADL - 8}" y="${py((min+max)/2) + 4}" text-anchor="end">${fmtNum(((min+max)/2).toFixed(1))}</text>
-    <text x="${PADL - 8}" y="${py(min) + 4}" text-anchor="end">${fmtNum(min)}</text>
+    ${grid}
     <text x="${PADL}" y="${CH - 8}">${esc(pts[0].t)}</text>
     <text x="${px(mid).toFixed(1)}" y="${CH - 8}" text-anchor="middle">${esc(pts[mid].t)}</text>
     <text x="${CW - PADR}" y="${CH - 8}" text-anchor="end">${esc(pts[pts.length - 1].t)}</text>
-    <polygon points="${area}" fill="url(#fade)"/>
-    <polyline points="${line}" fill="none" stroke="var(--series-1)" stroke-width="2"
-      stroke-linecap="round" stroke-linejoin="round"/>
+    ${volBars}
+    ${series}
+    ${smaLine}${smaLegend}
+    <line x1="${PADL}" y1="${py(last.c)}" x2="${CW - PADR}" y2="${py(last.c)}"
+      stroke="${up ? "var(--good)" : "var(--bad)"}" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"/>
     <g id="crosshair" style="display:none">
       <line id="chLine" y1="${PADT}" y2="${CH - PADB}" stroke="var(--baseline)" stroke-width="1"/>
       <circle id="chDot" r="4" fill="var(--series-1)" stroke="var(--surface)" stroke-width="2"/>
@@ -404,6 +470,13 @@ function drawChart() {
     chgEl.textContent = `${sign(wchg.toFixed(2))}% in view`;
     chgEl.className = "zoom-hint " + (up ? "pos" : "neg");
   }
+}
+
+function setChartStyle(st) {
+  chart.style = st;
+  document.querySelectorAll(".ranges button[data-cs]").forEach(b =>
+    b.classList.toggle("active", b.dataset.cs === st));
+  drawChart();
 }
 
 function chartIndexFromEvent(e) {
@@ -435,10 +508,10 @@ function onChartMove(e) {
   const pts = chart.data.slice(chart.i0, chart.i1 + 1);
   const p = pts[Math.min(hit.local, pts.length - 1)];
   if (!p) return;
-  const vals = pts.map(q => q.c);
-  const min = Math.min(...vals), max = Math.max(...vals), span = (max - min) || 1;
+  const sc = chart._scale || { min: Math.min(...pts.map(q => q.c)), max: Math.max(...pts.map(q => q.c)), plotBot: CH - PADB };
+  const span = (sc.max - sc.min) || 1;
   const cx = PADL + (hit.local / (pts.length - 1)) * (CW - PADL - PADR);
-  const cy = PADT + (1 - (p.c - min) / span) * (CH - PADT - PADB);
+  const cy = PADT + (1 - (p.c - sc.min) / span) * (sc.plotBot - PADT);
   const g = document.getElementById("crosshair");
   g.style.display = "block";
   const lineEl = document.getElementById("chLine");
@@ -447,13 +520,26 @@ function onChartMove(e) {
   dotEl.setAttribute("cx", cx); dotEl.setAttribute("cy", cy);
   const tip = document.getElementById("chartTip");
   tip.style.display = "block";
-  tip.textContent = `${p.t} · ₹${fmtNum(p.c)}`;
+  if (p.o != null && chart.style === "candle") {
+    const chg = p.o ? ((p.c / p.o - 1) * 100).toFixed(2) : 0;
+    tip.innerHTML = `<b>${esc(p.t)}</b> <span class="${p.c >= p.o ? "tp" : "tn"}">${sign(chg)}%</span><br>
+      O ${fmtNum(p.o)} · H ${fmtNum(p.h)} · L ${fmtNum(p.l)} · C ${fmtNum(p.c)}${p.v ? `<br>Vol ${fmtVol(p.v)}` : ""}`;
+  } else {
+    tip.textContent = `${p.t} · ₹${fmtNum(p.c)}`;
+  }
   const holder = document.getElementById("chartHolder");
   const hr = holder.getBoundingClientRect();
   let left = e.clientX - hr.left + 14;
-  if (left > hr.width - 130) left = e.clientX - hr.left - 130;
+  if (left > hr.width - 210) left = e.clientX - hr.left - 210;
   tip.style.left = left + "px";
-  tip.style.top = Math.max(0, e.clientY - hr.top - 34) + "px";
+  tip.style.top = Math.max(0, e.clientY - hr.top - 48) + "px";
+}
+
+function fmtVol(v) {
+  if (v >= 1e7) return (v / 1e7).toFixed(1) + " Cr";
+  if (v >= 1e5) return (v / 1e5).toFixed(1) + " L";
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + "K";
+  return String(v);
 }
 
 function onChartWheel(e) {
@@ -617,12 +703,15 @@ function renderStock(s) {
     <div class="ranges" id="rangesRow">
       ${["1D","1W","1M","3M","1Y","5Y"].map(r =>
         `<button data-r="${r}" onclick="loadChart('${s.symbol}','${r}')">${r}</button>`).join("")}
+      <span style="width:1px;height:18px;background:var(--grid);margin:0 4px"></span>
+      <button data-cs="candle" class="active" onclick="setChartStyle('candle')" title="Candlestick">🕯 Candles</button>
+      <button data-cs="line" onclick="setChartStyle('line')" title="Line">─ Line</button>
       <span class="zoom-hint" id="windowChg"></span>
       <span class="zoom-hint">scroll = zoom · drag = pan · double-click = reset</span>
     </div>
     <div class="stock-body">
       <div class="chart-holder" id="chartHolder"><div class="empty">Loading chart…</div></div>
-      <div class="chart-holder" id="predictHolder" hidden><div class="empty">Prediction ban rahi hai…</div></div>
+      <div class="chart-holder" id="predictHolder" hidden><div class="empty">Building prediction…</div></div>
       <div class="stats-grid">
         ${stat("RSI (14)", m.rsi)}
         ${stat("Volume ×avg", m.vol_ratio + "×")}
@@ -677,7 +766,7 @@ async function loadPrediction(sym) {
   predictLoadingFor = sym;
   const holder = document.getElementById("predictHolder");
   holder.innerHTML = `<div class="empty"><span class="spin" style="border-color:var(--muted);border-top-color:var(--series-1)"></span>
-    Saare factors (RSI, trend, volume, 52w, momentum, Nifty, news sentiment) combine ho rahe hain…</div>`;
+    Combining all factors — RSI, trend, volume, 52w position, momentum, Nifty regime &amp; news sentiment…</div>`;
   try {
     const d = await (await fetch("/api/predict/" + encodeURIComponent(sym))).json();
     if (chart.sym !== sym) return;  // user opened another stock meanwhile
@@ -748,7 +837,7 @@ function renderPrediction(d, holder) {
       : d.backtest.confidence === "MEDIUM" ? "background:rgba(250,178,25,.15);color:var(--amber)"
       : "background:rgba(230,103,103,.12);color:var(--bad)"}">${d.backtest.confidence} CONFIDENCE</span>` : ""}
     <span style="color:var(--muted);font-weight:500">(drift ${sign(d.drift_pct_per_day)}%/day · shaded = uncertainty band)</span></div>
-  ${d.backtest && d.backtest.confidence === "LOW" ? `<div style="font-size:12px;color:var(--bad);margin-top:6px">⚠ Model is stock pe apna recent past bhi predict nahi kar paya — prediction flatten kar di gayi hai, ise trade signal mat samajhna.</div>` : ""}
+  ${d.backtest && d.backtest.confidence === "LOW" ? `<div style="font-size:12px;color:var(--bad);margin-top:6px">⚠ Low confidence: the model could not reliably predict this stock's recent history, so the forecast has been flattened. Do not treat this as a trade signal.</div>` : ""}
   ${d.backtest && d.backtest.hit_rate != null ? `
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
     <div class="tile" style="padding:10px 14px">
@@ -785,16 +874,16 @@ async function loadNews(sym) {
     </div>`).join("");
   } catch (e) {
     const el = document.getElementById("newsList");
-    if (el) el.textContent = "News load nahi hui.";
+    if (el) el.textContent = "Could not load news.";
   }
 }
 
 async function runAI(sym) {
   const btn = document.getElementById("aiBtn");
   const panel = document.getElementById("aiPanel");
-  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Claude soch raha hai…`;
+  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Claude is thinking…`;
   panel.classList.add("show");
-  panel.innerHTML = `<div class="ai-source">✨ Claude · price, RSI, volume, levels &amp; news sab padh raha hai…</div>
+  panel.innerHTML = `<div class="ai-source">✨ Claude · reading price action, RSI, volume, key levels &amp; latest news…</div>
     <div class="skel" style="width:92%"></div><div class="skel" style="width:100%"></div>
     <div class="skel" style="width:84%"></div><div class="skel" style="width:95%"></div>
     <div class="skel" style="width:60%"></div>`;
@@ -856,7 +945,7 @@ async function loadMovers(force) {
     btn.disabled = true;
     btn.innerHTML = `<span class="spin"></span>Scanning NSE+BSE (~7000 stocks, 5–10 min)…`;
     document.getElementById("moversCard").innerHTML =
-      `<div class="empty">Poora Indian market scan ho raha hai — NSE + BSE ~7000 stocks ka 1 saal ka data. 5–10 minute lagenge, chai le aao ☕</div>`;
+      `<div class="empty">Scanning the entire Indian market — 1 year of data across ~7000 NSE + BSE stocks. This takes 5–10 minutes ☕</div>`;
   }
   try {
     let d;

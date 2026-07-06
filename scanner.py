@@ -649,8 +649,18 @@ def chart_data(symbol, rng="3M"):
     idx = df.index
     if getattr(idx, "tz", None) is not None:
         idx = idx.tz_convert(IST)
-    points = [{"t": ts.strftime(fmt), "c": round(float(c), 2)}
-              for ts, c in zip(idx, df["Close"]) if not math.isnan(float(c))]
+    points = []
+    for ts, o, h, l, c, v in zip(idx, df["Open"], df["High"], df["Low"],
+                                 df["Close"], df["Volume"]):
+        if math.isnan(float(c)):
+            continue
+        points.append({
+            "t": ts.strftime(fmt), "c": round(float(c), 2),
+            "o": round(float(o), 2) if not math.isnan(float(o)) else round(float(c), 2),
+            "h": round(float(h), 2) if not math.isnan(float(h)) else round(float(c), 2),
+            "l": round(float(l), 2) if not math.isnan(float(l)) else round(float(c), 2),
+            "v": int(v) if not math.isnan(float(v)) else 0,
+        })
     first, last = points[0]["c"], points[-1]["c"]
     return {
         "symbol": sym, "range": rng, "interval": interval,
