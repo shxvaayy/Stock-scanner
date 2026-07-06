@@ -737,9 +737,43 @@ def top_movers(force=False):
 
 # ---------------- News ----------------
 
-def stock_news(symbol):
-    """Recent Yahoo Finance news for one stock (title, publisher, link, time)."""
-    sym = _clean_symbol(symbol)
+def _google_news(sym):
+    """Latest Indian market news via Google News RSS (what Groww-style feeds use)."""
+    import urllib.request
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+
+    q = urllib.parse.quote(f'"{sym}" share price NSE')
+    url = (f"https://news.google.com/rss/search?q={q}+when:14d"
+           f"&hl=en-IN&gl=IN&ceid=IN:en")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        root = ET.fromstring(r.read())
+    items = []
+    for it in root.iter("item"):
+        title = (it.findtext("title") or "").strip()
+        if not title:
+            continue
+        # Google appends " - Publisher" to titles; source tag is cleaner
+        publisher = (it.findtext("source") or "").strip()
+        if publisher and title.endswith(" - " + publisher):
+            title = title[: -len(" - " + publisher)]
+        ts = 0
+        when = ""
+        try:
+            dt = parsedate_to_datetime(it.findtext("pubDate") or "").astimezone(IST)
+            ts = dt.timestamp()
+            when = dt.strftime("%d %b %Y %H:%M")
+        except Exception:
+            pass
+        items.append({"title": title, "publisher": publisher or "Google News",
+                      "link": (it.findtext("link") or "").strip(),
+                      "time": when, "ts": ts})
+    return items
+
+
+def _yahoo_news(sym):
     try:
         raw = yf.Ticker(yahoo_symbol(sym)).news or []
     except Exception:
@@ -753,13 +787,171 @@ def stock_news(symbol):
             continue
         link = (content.get("canonicalUrl") or {}).get("url") or content.get("link", "")
         publisher = (content.get("provider") or {}).get("displayName") or content.get("publisher", "")
+        ts = 0
         when = content.get("pubDate") or ""
         if not when and content.get("providerPublishTime"):
-            when = datetime.fromtimestamp(content["providerPublishTime"], IST).strftime("%d %b %Y %H:%M")
+            ts = float(content["providerPublishTime"])
+            when = datetime.fromtimestamp(ts, IST).strftime("%d %b %Y %H:%M")
         elif when:
-            when = when[:16].replace("T", " ")
-        items.append({"title": title, "publisher": publisher, "link": link, "time": when})
-    return {"symbol": sym, "news": items}
+            try:
+                dt = datetime.fromisoformat(when.replace("Z", "+00:00")).astimezone(IST)
+                ts = dt.timestamp()
+                when = dt.strftime("%d %b %Y %H:%M")
+            except ValueError:
+                when = when[:16].replace("T", " ")
+        items.append({"title": title, "publisher": publisher, "link": link,
+                      "time": when, "ts": ts})
+    return items
+
+
+def stock_news(symbol):
+    """Latest news for one stock: Google News India + Yahoo Finance, merged,
+    deduped and sorted newest-first."""
+    sym = _clean_symbol(symbol)
+    items = []
+    try:
+        items += _google_news(sym)
+    except Exception:
+        pass
+    items += _yahoo_news(sym)
+
+    seen, unique = set(), []
+    for n in sorted(items, key=lambda n: n.get("ts", 0), reverse=True):
+        key = re.sub(r"\W+", "", n["title"].lower())[:60]
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(n)
+    return {"symbol": sym, "news": unique[:12]}
+
+
+# ---------------- Prediction ----------------
+
+_POS_WORDS = ("surge", "jump", "gain", "rally", "profit", "beats", "wins", "win",
+              "order", "upgrade", "buy", "record", "high", "growth", "approval",
+              "deal", "expansion", "strong", "bonus", "dividend", "acquisition",
+              "contract", "soars", "rises", "up ", "bullish", "outperform")
+_NEG_WORDS = ("fall", "drop", "loss", "miss", "downgrade", "sell", "probe",
+              "fraud", "penalty", "weak", "cut", "layoff", "debt", "default",
+              "resign", "plunge", "crash", "slump", "down ", "bearish", "fine",
+              "lawsuit", "recall", "warning", "underperform", "scam")
+
+
+def news_sentiment(news_items):
+    """Crude but honest keyword sentiment over headlines: -1 .. +1."""
+    if not news_items:
+        return 0.0, 0, 0
+    pos = neg = 0
+    for n in news_items[:10]:
+        t = " " + n["title"].lower() + " "
+        pos += sum(1 for w in _POS_WORDS if w in t)
+        neg += sum(1 for w in _NEG_WORDS if w in t)
+    total = pos + neg
+    return ((pos - neg) / total if total else 0.0), pos, neg
+
+
+def predict_series(symbol, horizon=15):
+    """Factor-model forecast for the next `horizon` sessions.
+
+    Combines trend (SMA structure), RSI momentum/mean-reversion, volume
+    participation, 52-week position, 20-day momentum, Nifty regime and news
+    sentiment into a daily drift, then projects a path with a widening
+    uncertainty band from the stock's own average daily range.
+    Educational estimate — NOT a guarantee.
+    """
+    snap = analyze_stock(symbol)
+    m = snap["metrics"]
+    news = stock_news(symbol)
+    senti, pos_hits, neg_hits = news_sentiment(news["news"])
+
+    price = snap["price"]
+    factors = []
+
+    def add(name, impact, note):
+        factors.append({"name": name, "impact": round(impact, 3), "note": note})
+        return impact
+
+    drift = 0.0
+    if price > m["sma20"] > m["sma50"]:
+        drift += add("Trend", 0.15, "price > SMA20 > SMA50 — uptrend structure")
+    elif price < m["sma20"] < m["sma50"]:
+        drift += add("Trend", -0.15, "price < SMA20 < SMA50 — downtrend structure")
+    else:
+        add("Trend", 0.0, "mixed SMA structure — no clear trend")
+
+    rsi = m["rsi"]
+    if rsi >= 70:
+        drift += add("RSI", -0.10, f"RSI {rsi} overbought — pullback risk")
+    elif rsi >= 55:
+        drift += add("RSI", 0.08, f"RSI {rsi} — bullish momentum zone")
+    elif rsi > 45:
+        add("RSI", 0.0, f"RSI {rsi} — neutral")
+    elif rsi > 30:
+        drift += add("RSI", -0.08, f"RSI {rsi} — bearish pressure")
+    else:
+        drift += add("RSI", 0.10, f"RSI {rsi} oversold — bounce candidate")
+
+    trend_sign = 1 if drift >= 0 else -1
+    if m["vol_ratio"] >= 2:
+        drift += add("Volume", 0.05 * trend_sign,
+                     f"{m['vol_ratio']}× avg volume — strong participation")
+    elif m["vol_ratio"] >= 1.3:
+        drift += add("Volume", 0.03 * trend_sign,
+                     f"{m['vol_ratio']}× avg volume — above average")
+    else:
+        add("Volume", 0.0, f"{m['vol_ratio']}× avg volume — low conviction")
+
+    from_high = price / snap["year_high"] - 1
+    from_low = price / snap["year_low"] - 1
+    if from_high > -0.03:
+        drift += add("52W position", 0.05, "within 3% of 52w high — breakout zone")
+    elif from_low < 0.03:
+        drift += add("52W position", -0.05, "near 52w low — falling-knife zone")
+    else:
+        add("52W position", 0.0, f"{from_high * 100:.0f}% below 52w high")
+
+    hist = [pt["c"] for pt in snap["chart"]]
+    if len(hist) >= 21:
+        mom20 = (hist[-1] / hist[-21] - 1) * 100
+        mom_impact = max(-0.10, min(0.10, mom20 / 20 * 0.3))
+        drift += add("20d momentum", mom_impact, f"{mom20:+.1f}% over last 20 sessions")
+
+    if snap["nifty_trend"] == "UP":
+        drift += add("Nifty regime", 0.04, "Nifty above 50-DMA — supportive market")
+    else:
+        drift += add("Nifty regime", -0.04, "Nifty below 50-DMA — headwind")
+
+    senti_impact = max(-0.12, min(0.12, senti * 0.12))
+    drift += add("News sentiment", senti_impact,
+                 f"{pos_hits} positive / {neg_hits} negative signals in latest headlines"
+                 if (pos_hits or neg_hits) else "no strong signal in recent headlines")
+
+    drift = max(-0.4, min(0.4, drift))  # cap: no model knows better than ±0.4%/day
+
+    daily_sigma = max(m["avg_range_pct"], 0.5) * 0.6 / 100
+    points = []
+    mid = price
+    for t in range(1, horizon + 1):
+        mid = mid * (1 + drift / 100)
+        band = price * daily_sigma * math.sqrt(t)
+        points.append({"d": f"+{t}d", "mid": round(mid, 2),
+                       "lo": round(mid - band, 2), "hi": round(mid + band, 2)})
+
+    return {
+        "symbol": snap["symbol"],
+        "last_close": price,
+        "as_of": snap["as_of"],
+        "history": snap["chart"][-60:],
+        "drift_pct_per_day": round(drift, 3),
+        "horizon": horizon,
+        "expected_move_pct": round((points[-1]["mid"] / price - 1) * 100, 2),
+        "factors": factors,
+        "sentiment": {"score": round(senti, 2), "pos": pos_hits, "neg": neg_hits},
+        "points": points,
+        "disclaimer": ("Factor-model estimate from trend, RSI, volume, 52w position, "
+                       "momentum, Nifty regime & news sentiment. Markets are not "
+                       "predictable — treat the band, not the line, as the message."),
+    }
 
 
 # ---------------- AI analysis ----------------

@@ -144,6 +144,61 @@
   .ai-panel p { margin-bottom: 9px; }
   .ai-source { font-size: 11px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; font-weight: 650; }
 
+  /* ===== AI button — animated gradient + glow ===== */
+  .ai-btn {
+    position: relative; overflow: hidden; border: none; color: #fff;
+    padding: 11px 22px; border-radius: 12px; font-weight: 700; font-size: 14px;
+    letter-spacing: .02em; cursor: pointer;
+    background: linear-gradient(120deg, #7c3aed, #2a78d6, #0ea5e9, #7c3aed);
+    background-size: 300% 300%;
+    animation: aiFlow 6s ease infinite;
+    box-shadow: 0 4px 18px rgba(124, 58, 237, .35);
+    transition: transform .18s ease, box-shadow .18s ease;
+  }
+  .ai-btn:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 8px 26px rgba(124, 58, 237, .5); }
+  .ai-btn:active { transform: translateY(0) scale(.99); }
+  .ai-btn:disabled { opacity: .85; cursor: wait; }
+  .ai-btn::after {
+    content: ""; position: absolute; top: 0; left: -80%; width: 60%; height: 100%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,.35), transparent);
+    transform: skewX(-20deg); animation: aiShine 3.2s ease-in-out infinite;
+  }
+  @keyframes aiFlow { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+  @keyframes aiShine { 0%, 60% { left: -80%; } 90%, 100% { left: 130%; } }
+  .ai-panel.show { display: block; animation: riseIn .35s ease both; }
+  @keyframes riseIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  /* skeleton shimmer while AI thinks */
+  .skel { height: 12px; border-radius: 6px; margin: 9px 0;
+    background: linear-gradient(90deg, var(--grid) 25%, var(--hover-wash) 50%, var(--grid) 75%);
+    background-size: 200% 100%; animation: shimmer 1.3s linear infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  /* ===== chart view tabs (Market / Prediction) ===== */
+  .chart-tabs { display: inline-flex; gap: 4px; background: var(--page);
+    border: 1px solid var(--grid); border-radius: 10px; padding: 3px; margin: 0 0 10px; }
+  .chart-tabs button { border: none; background: transparent; padding: 6px 16px;
+    border-radius: 8px; font-weight: 650; font-size: 13px; color: var(--muted);
+    cursor: pointer; transition: all .2s ease; }
+  .chart-tabs button.active { background: var(--series-1); color: #fff;
+    box-shadow: 0 2px 8px rgba(42,120,214,.35); }
+
+  /* prediction extras */
+  .predict-line { stroke-dasharray: 6 5; animation: dashMove 1.2s linear infinite; }
+  @keyframes dashMove { to { stroke-dashoffset: -22; } }
+  .draw-in { stroke-dasharray: 2400; stroke-dashoffset: 2400; animation: drawIn 1.4s ease forwards; }
+  @keyframes drawIn { to { stroke-dashoffset: 0; } }
+  .factor-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+  .chip { font-size: 11.5px; font-weight: 650; padding: 5px 11px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--page); color: var(--muted);
+    animation: riseIn .4s ease both; }
+  .chip.pos { color: var(--good); border-color: rgba(12,163,12,.35); background: rgba(12,163,12,.07); }
+  .chip.neg { color: var(--bad); border-color: rgba(230,103,103,.35); background: rgba(230,103,103,.07); }
+  .predict-note { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .expected { font-size: 13px; font-weight: 700; margin-top: 10px; }
+
+  .news-item { animation: riseIn .35s ease both; }
+
   /* settings */
   #settingsPanel { margin-bottom: 20px; }
   .settings-row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; padding: 14px 18px; }
@@ -555,7 +610,11 @@ function renderStock(s) {
       <span class="chg-chip ${cls(s.change_pct)}" id="chgChip">${sign(s.change_pct)}%</span>
       <button class="xbtn" onclick="closeStock()" title="Close">✕</button>
     </div>
-    <div class="ranges">
+    <div class="chart-tabs">
+      <button id="tabMarket" class="active" onclick="switchView('market')">📈 Market</button>
+      <button id="tabPredict" onclick="switchView('predict')">🔮 Prediction</button>
+    </div>
+    <div class="ranges" id="rangesRow">
       ${["1D","1W","1M","3M","1Y","5Y"].map(r =>
         `<button data-r="${r}" onclick="loadChart('${s.symbol}','${r}')">${r}</button>`).join("")}
       <span class="zoom-hint" id="windowChg"></span>
@@ -563,6 +622,7 @@ function renderStock(s) {
     </div>
     <div class="stock-body">
       <div class="chart-holder" id="chartHolder"><div class="empty">Loading chart…</div></div>
+      <div class="chart-holder" id="predictHolder" hidden><div class="empty">Prediction ban rahi hai…</div></div>
       <div class="stats-grid">
         ${stat("RSI (14)", m.rsi)}
         ${stat("Volume ×avg", m.vol_ratio + "×")}
@@ -579,7 +639,7 @@ function renderStock(s) {
       ${m.reasons.length ? `<div class="why">${m.reasons.join(" · ")} · Nifty ${s.nifty_trend}</div>` : ""}
     </div>
     <div class="stock-extra">
-      <button class="primary" id="aiBtn" onclick="runAI('${s.symbol}')">✨ AI Analysis</button>
+      <button class="ai-btn" id="aiBtn" onclick="runAI('${s.symbol}')">✨ AI Analysis <span style="font-weight:400;opacity:.85">· Claude</span></button>
       <div class="ai-panel" id="aiPanel"></div>
       <h3 style="margin-top:14px">📰 Latest News</h3>
       <div id="newsList" style="font-size:12.5px;color:var(--muted)">Loading news…</div>
@@ -597,14 +657,106 @@ function closeStock() {
   document.getElementById("stockCard").hidden = true;
 }
 
+/* ================= market / prediction tabs ================= */
+let predictLoadedFor = null;
+
+function switchView(v) {
+  const market = v === "market";
+  document.getElementById("tabMarket").classList.toggle("active", market);
+  document.getElementById("tabPredict").classList.toggle("active", !market);
+  document.getElementById("rangesRow").style.display = market ? "" : "none";
+  document.getElementById("chartHolder").hidden = !market;
+  document.getElementById("predictHolder").hidden = market;
+  if (!market && predictLoadedFor !== chart.sym) loadPrediction(chart.sym);
+}
+
+async function loadPrediction(sym) {
+  const holder = document.getElementById("predictHolder");
+  holder.innerHTML = `<div class="empty"><span class="spin" style="border-color:var(--muted);border-top-color:var(--series-1)"></span>
+    Saare factors (RSI, trend, volume, 52w, momentum, Nifty, news sentiment) combine ho rahe hain…</div>`;
+  try {
+    const d = await (await fetch("/api/predict/" + encodeURIComponent(sym))).json();
+    if (d.error) { holder.innerHTML = `<div class="empty">⚠ ${esc(d.error)}</div>`; return; }
+    predictLoadedFor = sym;
+    renderPrediction(d, holder);
+  } catch (e) {
+    holder.innerHTML = `<div class="empty">⚠ Prediction failed: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderPrediction(d, holder) {
+  const W = 760, H = 290, PL = 56, PR = 14, PT = 14, PB = 26;
+  const hist = d.history.map(p => p.c);
+  const mids = d.points.map(p => p.mid);
+  const all = [...hist, ...d.points.map(p => p.lo), ...d.points.map(p => p.hi)];
+  const min = Math.min(...all), max = Math.max(...all), span = (max - min) || 1;
+  const n = hist.length + mids.length;
+  const px = i => PL + (i / (n - 1)) * (W - PL - PR);
+  const py = v => PT + (1 - (v - min) / span) * (H - PT - PB);
+
+  const histLine = hist.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  const predLine = [`${px(hist.length - 1).toFixed(1)},${py(hist[hist.length - 1]).toFixed(1)}`,
+    ...mids.map((v, i) => `${px(hist.length + i).toFixed(1)},${py(v).toFixed(1)}`)].join(" ");
+  const bandTop = d.points.map((p, i) => `${px(hist.length + i).toFixed(1)},${py(p.hi).toFixed(1)}`);
+  const bandBot = d.points.map((p, i) => `${px(hist.length + i).toFixed(1)},${py(p.lo).toFixed(1)}`).reverse();
+  const band = [`${px(hist.length - 1).toFixed(1)},${py(hist[hist.length - 1]).toFixed(1)}`, ...bandTop,
+                ...bandBot].join(" ");
+  const xToday = px(hist.length - 1).toFixed(1);
+  const up = d.expected_move_pct >= 0;
+  const col = up ? "var(--good)" : "var(--bad)";
+
+  const chips = d.factors.map((f, i) => {
+    const cls2 = f.impact > 0 ? "pos" : f.impact < 0 ? "neg" : "";
+    const val = f.impact ? ` ${f.impact > 0 ? "+" : ""}${f.impact}%/d` : " 0";
+    return `<span class="chip ${cls2}" style="animation-delay:${i * 70}ms" title="${esc(f.note)}">${esc(f.name)}${val}</span>`;
+  }).join("");
+
+  holder.innerHTML = `
+  <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="predicted price path">
+    <defs><linearGradient id="bandFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="${up ? "#0ca30c" : "#e66767"}" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="${up ? "#0ca30c" : "#e66767"}" stop-opacity="0.06"/>
+    </linearGradient></defs>
+    <line x1="${PL}" y1="${py(min)}" x2="${W - PR}" y2="${py(min)}" stroke="var(--grid)"/>
+    <line x1="${PL}" y1="${py(max)}" x2="${W - PR}" y2="${py(max)}" stroke="var(--grid)"/>
+    <text x="${PL - 8}" y="${py(max) + 4}" text-anchor="end">${fmtNum(max)}</text>
+    <text x="${PL - 8}" y="${py(min) + 4}" text-anchor="end">${fmtNum(min)}</text>
+    <line x1="${xToday}" y1="${PT}" x2="${xToday}" y2="${H - PB}" stroke="var(--baseline)" stroke-dasharray="2 4"/>
+    <text x="${xToday}" y="${H - 8}" text-anchor="middle">today</text>
+    <text x="${PL}" y="${H - 8}">${esc(d.history[0].d)}</text>
+    <text x="${W - PR}" y="${H - 8}" text-anchor="end">+${d.horizon} sessions</text>
+    <polygon points="${band}" fill="url(#bandFade)"/>
+    <polyline points="${histLine}" fill="none" stroke="var(--series-1)" stroke-width="2" class="draw-in"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="${predLine}" fill="none" stroke="${col}" stroke-width="2.5" class="predict-line"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${px(n - 1).toFixed(1)}" cy="${py(mids[mids.length - 1]).toFixed(1)}" r="4" fill="${col}"
+      stroke="var(--surface)" stroke-width="2"/>
+    <text x="${px(n - 1).toFixed(1)}" y="${py(mids[mids.length - 1]) - 10}" text-anchor="end"
+      style="font-weight:700;fill:${col}">₹${fmtNum(mids[mids.length - 1])}</text>
+  </svg>
+  <div class="expected" style="color:${col}">Expected ${up ? "▲" : "▼"} ${sign(d.expected_move_pct)}% over next ${d.horizon} sessions
+    <span style="color:var(--muted);font-weight:500">(drift ${sign(d.drift_pct_per_day)}%/day · shaded = uncertainty band)</span></div>
+  <div class="factor-chips">${chips}</div>
+  <div class="predict-note">⚠ ${esc(d.disclaimer)}</div>`;
+}
+
+function timeAgo(ts) {
+  if (!ts) return "";
+  const s = Date.now() / 1000 - ts;
+  if (s < 3600) return Math.max(1, Math.round(s / 60)) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+
 async function loadNews(sym) {
   try {
     const d = await (await fetch("/api/news/" + encodeURIComponent(sym))).json();
     const el = document.getElementById("newsList");
     if (!d.news || !d.news.length) { el.textContent = "No recent news found for this stock."; return; }
-    el.innerHTML = d.news.map(n => `<div class="news-item">
+    el.innerHTML = d.news.map((n, i) => `<div class="news-item" style="animation-delay:${i * 60}ms">
       <a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a>
-      <div class="news-meta">${esc(n.publisher)}${n.time ? " · " + esc(n.time) : ""}</div>
+      <div class="news-meta">${esc(n.publisher)}${n.ts ? " · " + timeAgo(n.ts) : (n.time ? " · " + esc(n.time) : "")}</div>
     </div>`).join("");
   } catch (e) {
     const el = document.getElementById("newsList");
@@ -615,23 +767,28 @@ async function loadNews(sym) {
 async function runAI(sym) {
   const btn = document.getElementById("aiBtn");
   const panel = document.getElementById("aiPanel");
-  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Analyzing…`;
+  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Claude soch raha hai…`;
   panel.classList.add("show");
-  panel.innerHTML = `<div style="color:var(--muted)">Sab parameters + news padh ke analysis ban raha hai…</div>`;
+  panel.innerHTML = `<div class="ai-source">✨ Claude · price, RSI, volume, levels &amp; news sab padh raha hai…</div>
+    <div class="skel" style="width:92%"></div><div class="skel" style="width:100%"></div>
+    <div class="skel" style="width:84%"></div><div class="skel" style="width:95%"></div>
+    <div class="skel" style="width:60%"></div>`;
   try {
     const d = await (await fetch("/api/ai/" + encodeURIComponent(sym))).json();
     if (d.error) { panel.innerHTML = `⚠ ${esc(d.error)}`; return; }
     const src = d.source === "claude"
-      ? `Claude AI · ${esc(d.model || "")}`
+      ? `✨ Claude AI · ${esc(d.model || "")}`
       : `Rule-based analysis — ${esc(d.note || "")}`;
     const html = esc(d.text)
+      .replace(/^#{1,4} (.+)$/gm, "<b>$1</b>")
       .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-      .split(/\n{2,}/).map(par => `<p>${par.replace(/\n/g, "<br>")}</p>`).join("");
+      .split(/\n{2,}/).map((par, i) =>
+        `<p style="animation:riseIn .4s ease both;animation-delay:${i * 90}ms">${par.replace(/\n/g, "<br>")}</p>`).join("");
     panel.innerHTML = `<div class="ai-source">${src}</div>${html}`;
   } catch (e) {
     panel.innerHTML = `⚠ AI analysis failed: ${esc(e.message)}`;
   } finally {
-    btn.disabled = false; btn.textContent = "✨ AI Analysis";
+    btn.disabled = false; btn.innerHTML = `✨ AI Analysis <span style="font-weight:400;opacity:.85">· Claude</span>`;
   }
 }
 

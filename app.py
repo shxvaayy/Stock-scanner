@@ -134,6 +134,16 @@ def api_ai(symbol):
         return jsonify({"error": str(e)}), 500
 
 
+@app.get("/api/predict/<symbol>")
+def api_predict(symbol):
+    try:
+        return jsonify(scanner.predict_series(symbol))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.get("/api/movers")
 def api_movers():
     try:
