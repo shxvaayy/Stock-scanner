@@ -1,0 +1,736 @@
+"""Simulate a range of trading days and produce a summary table.
+
+v3.0 — Regime-adaptive system:
+  Market regime classified each day: BULL / BEAR / CRASH
+  BULL: S1 RSI(5) buy dips + S3 15-min mean reversion
+  BEAR: Sell overbought rallies (short to VWAP)
+  CRASH: No new entries
+
+  Circuit breakers: 3 consecutive losses = stop, Rs 7,500 daily hard cap
+  IBS filter: prior day IBS > 0.25 reduces position size 50%
+
+Usage: python simulate_range.py 2026-02-03 2026-02-13
+"""
+
+import os
+import sys
+import json
+import time
+import pickle
+from datetime import datetime, date, timedelta
+from collections import defaultdict
+from pathlib import Path
+
+import pandas as pd
+import pyotp
+from SmartApi import SmartConnect
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+load_dotenv(PROJECT_ROOT / ".env")
+
+from core.regime import classify_regime_from_data, MarketRegime
+
+# ── Indicators ──
+def rsi(series, period=5):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, 1e-10)
+    return 100 - (100 / (1 + rs))
+
+def rsi_calc(series, period=14):
+    """RSI with configurable period — used for daily regime check."""
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, 1e-10)
+    return 100 - (100 / (1 + rs))
+
+def atr_calc(high, low, close, period=14):
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+def ema(series, period):
+    return series.ewm(span=period, adjust=False).mean()
+
+def vwap_calc(df):
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    return (tp * df["volume"]).cumsum() / df["volume"].cumsum().replace(0, 1)
+
+def adx_calc(high, low, close, period=14):
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1/period, min_periods=period).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1/period, min_periods=period).mean() / atr.replace(0, 1e-10))
+    minus_di = 100 * (minus_dm.ewm(alpha=1/period, min_periods=period).mean() / atr.replace(0, 1e-10))
+    dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10))
+    return dx.ewm(alpha=1/period, min_periods=period).mean()
+
+def kaufman_er(series, period=10):
+    """Kaufman Efficiency Ratio. 0=pure chop, 1=perfect trend."""
+    direction = abs(series - series.shift(period))
+    volatility = series.diff().abs().rolling(period).sum()
+    return direction / volatility.replace(0, 1e-10)
+
+def mfi(high, low, close, volume, period=8):
+    """Money Flow Index — RSI with volume."""
+    tp = (high + low + close) / 3
+    mf = tp * volume
+    pos_mf = mf.where(tp > tp.shift(1), 0.0).rolling(period).sum()
+    neg_mf = mf.where(tp < tp.shift(1), 0.0).rolling(period).sum()
+    mr = pos_mf / neg_mf.replace(0, 1e-10)
+    return 100 - (100 / (1 + mr))
+
+
+# Shared universe (Nifty 50 + liquid watchlist names)
+from config.universe import SECTOR_MAP, STOCKS
+CAPITAL = 250000
+RISK_PER_TRADE = 2500
+
+
+def get_trading_days(start_date, end_date):
+    """Return weekdays between start and end (inclusive)."""
+    days = []
+    current = start_date
+    while current <= end_date:
+        if current.weekday() < 5:  # Mon-Fri
+            days.append(current)
+        current += timedelta(days=1)
+    return days
+
+
+def fetch_daily_regime(api, token_map, target_date):
+    """Fetch daily candles and compute 2-of-3 regime check for each stock."""
+    daily_regime = {}
+    for sym, tok in token_map.items():
+        time.sleep(0.5)
+        try:
+            r = api.getCandleData({
+                "exchange": "NSE", "symboltoken": tok, "interval": "ONE_DAY",
+                "fromdate": "2025-06-01 09:15",
+                "todate": f"{target_date} 15:30",
+            })
+            if r and r.get("data") and len(r["data"]) > 50:
+                ddf = pd.DataFrame(r["data"], columns=["timestamp", "open", "high", "low", "close", "volume"])
+                ddf["close"] = pd.to_numeric(ddf["close"], errors="coerce")
+                ddf["high"] = pd.to_numeric(ddf["high"], errors="coerce")
+                ddf["low"] = pd.to_numeric(ddf["low"], errors="coerce")
+                ddf["ema200"] = ema(ddf["close"], 200)
+                ddf["rsi14"] = rsi_calc(ddf["close"], 14)
+                ddf["adx14"] = adx_calc(ddf["high"], ddf["low"], ddf["close"], 14)
+                last = ddf.iloc[-1]
+
+                checks_passed = 0
+                if pd.notna(last["ema200"]):
+                    if abs(last["close"] - last["ema200"]) / last["ema200"] < 0.08:
+                        checks_passed += 1
+                if pd.notna(last["rsi14"]):
+                    if 30 <= last["rsi14"] <= 65:
+                        checks_passed += 1
+                if pd.notna(last["adx14"]):
+                    if last["adx14"] < 25:
+                        checks_passed += 1
+
+                daily_regime[sym] = checks_passed >= 2
+            else:
+                daily_regime[sym] = True
+        except Exception:
+            daily_regime[sym] = True
+    return daily_regime
+
+
+def fetch_nifty_daily(api, target_date):
+    """Fetch Nifty daily candles for regime detection."""
+    try:
+        time.sleep(0.5)
+        r = api.getCandleData({
+            "exchange": "NSE", "symboltoken": "99926000",
+            "interval": "ONE_DAY",
+            "fromdate": "2024-01-01 09:15",
+            "todate": f"{target_date} 15:30",
+        })
+        if r and r.get("data") and len(r["data"]) > 50:
+            return pd.DataFrame(r["data"], columns=["timestamp", "open", "high", "low", "close", "volume"])
+    except Exception:
+        pass
+    return None
+
+
+def fetch_day(api, token_map, target_date, nifty_daily_df=None):
+    """Fetch 1-min candles for one day."""
+    cache = PROJECT_ROOT / "data" / f"cache_{target_date}_v30.pkl"
+    if cache.exists():
+        with open(cache, "rb") as f:
+            cached = pickle.load(f)
+        if isinstance(cached, tuple) and len(cached) == 4:
+            return cached
+        elif isinstance(cached, tuple) and len(cached) == 2:
+            return cached[0], cached[1], MarketRegime.BULL, {}
+        return cached, {sym: True for sym in cached}, MarketRegime.BULL, {}
+
+    # Fetch daily regime data
+    daily_regime = fetch_daily_regime(api, token_map, target_date)
+
+    # Market regime classification
+    market_regime = MarketRegime.BULL
+    regime_details = {}
+    if nifty_daily_df is not None and len(nifty_daily_df) > 50:
+        # Filter to data up to target_date
+        nifty_daily_df["timestamp"] = pd.to_datetime(nifty_daily_df["timestamp"], utc=True).dt.tz_localize(None)
+        mask = nifty_daily_df["timestamp"] <= pd.Timestamp(f"{target_date} 15:30")
+        nifty_subset = nifty_daily_df[mask].copy()
+        if len(nifty_subset) > 50:
+            market_regime, regime_details = classify_regime_from_data(nifty_subset)
+
+    data = {}
+    ds = str(target_date)
+    for sym, tok in token_map.items():
+        time.sleep(1.2)
+        try:
+            r = api.getCandleData({
+                "exchange": "NSE", "symboltoken": tok, "interval": "ONE_MINUTE",
+                "fromdate": f"{ds} 09:15", "todate": f"{ds} 15:30",
+            })
+            if r and r.get("data") and len(r["data"]) > 50:
+                df = pd.DataFrame(r["data"], columns=["timestamp", "open", "high", "low", "close", "volume"])
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                data[sym] = df
+        except Exception:
+            pass
+
+    if data:
+        cache.parent.mkdir(exist_ok=True)
+        with open(cache, "wb") as f:
+            pickle.dump((data, daily_regime, market_regime, regime_details), f)
+    return data, daily_regime, market_regime, regime_details
+
+
+def simulate_one_day(data, daily_regime=None, market_regime=None, regime_details=None,
+                     quality_gates=None):
+    """Run both strategies on one day's data. Returns dict of results.
+
+    quality_gates (optional dict): fee/selectivity filters layered on top of
+    the legacy logic. Keys: fee_floor_mult (skip entries whose distance to
+    VWAP target is < N x round-trip cost), s3_setup_expiry_bars,
+    min_vwap_dist_pct. None preserves legacy behaviour exactly.
+    """
+    if not data:
+        return None
+    qg = quality_gates or {}
+    if daily_regime is None:
+        daily_regime = {sym: True for sym in data}
+    if market_regime is None:
+        market_regime = MarketRegime.BULL
+    if regime_details is None:
+        regime_details = {}
+
+    prior_ibs = regime_details.get("prior_day_ibs", 0.5)
+    ibs_size_mult = 0.5 if prior_ibs > 0.25 else 1.0
+
+    # Precompute indicators
+    for sym, df in data.items():
+        df["atr14"] = atr_calc(df["high"], df["low"], df["close"], 14)
+        df["vwap"] = vwap_calc(df)
+
+        # 5-min resampled
+        df_5m = df.set_index("timestamp").resample("5min").agg({
+            "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum",
+        }).dropna().reset_index()
+        if len(df_5m) >= 6:
+            df_5m["rsi5"] = rsi(df_5m["close"], 5)
+            df["rsi5_5m"] = None
+            for _, bar in df_5m.iterrows():
+                mask = (df["timestamp"] >= bar["timestamp"]) & (df["timestamp"] < bar["timestamp"] + pd.Timedelta(minutes=5))
+                df.loc[mask, "rsi5_5m"] = bar.get("rsi5")
+            df["rsi5_5m"] = df["rsi5_5m"].ffill()
+
+            # MFI(8) on 5-min
+            if len(df_5m) >= 10:
+                df_5m["mfi8"] = mfi(df_5m["high"], df_5m["low"], df_5m["close"], df_5m["volume"], 8)
+                df["mfi8_5m"] = None
+                for _, bar in df_5m.iterrows():
+                    mask = (df["timestamp"] >= bar["timestamp"]) & (df["timestamp"] < bar["timestamp"] + pd.Timedelta(minutes=5))
+                    df.loc[mask, "mfi8_5m"] = bar.get("mfi8")
+                df["mfi8_5m"] = df["mfi8_5m"].ffill()
+
+        # 15-min resampled
+        df_15m = df.set_index("timestamp").resample("15min").agg({
+            "open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum",
+        }).dropna().reset_index()
+        if len(df_15m) >= 5:
+            df_15m["ker10"] = kaufman_er(df_15m["close"], 10)
+            df_15m["atr14"] = atr_calc(df_15m["high"], df_15m["low"], df_15m["close"], 14)
+            df_15m["rsi9"] = rsi(df_15m["close"], 9)
+            for col in ["ker10", "atr14", "rsi9"]:
+                df[f"{col}_15m"] = None
+                for _, bar in df_15m.iterrows():
+                    mask = (df["timestamp"] >= bar["timestamp"]) & (df["timestamp"] < bar["timestamp"] + pd.Timedelta(minutes=15))
+                    df.loc[mask, f"{col}_15m"] = bar.get(col)
+                df[f"{col}_15m"] = df[f"{col}_15m"].ffill()
+
+        # 5-min RSI(9) for S3
+        if len(df_5m) >= 10:
+            df_5m["rsi9"] = rsi(df_5m["close"], 9)
+            df["rsi9_5m"] = None
+            for _, bar in df_5m.iterrows():
+                mask = (df["timestamp"] >= bar["timestamp"]) & (df["timestamp"] < bar["timestamp"] + pd.Timedelta(minutes=5))
+                df.loc[mask, "rsi9_5m"] = bar.get("rsi9")
+            df["rsi9_5m"] = df["rsi9_5m"].ffill()
+
+    # State
+    positions = {}
+    closed = []
+    sector_count = defaultdict(int)
+    trade_count = 0
+    s1_signals = 0
+    s3_setups = 0
+    daily_pnl_tracker = 0.0
+    daily_losses_consecutive = 0
+    circuit_breaker_active = False
+
+    max_candles = max(len(df) for df in data.values())
+    sample_sym = list(data.keys())[0]
+
+    for i in range(20, max_candles):
+        if i >= len(data[sample_sym]):
+            break
+        ts = data[sample_sym]["timestamp"].iloc[i]
+        hour, minute = ts.hour, ts.minute
+
+        if hour < 9 or (hour == 9 and minute < 30):
+            continue
+        if hour >= 15 and minute > 10:
+            for tid in list(positions.keys()):
+                pos = positions[tid]
+                sym = pos["symbol"]
+                if sym in data and i < len(data[sym]):
+                    exit_p = data[sym]["close"].iloc[i]
+                    pnl = (pos["entry_price"] - exit_p) * pos["remaining"] if pos.get("side") == "SHORT" else (exit_p - pos["entry_price"]) * pos["remaining"]
+                    pos["realized_pnl"] += pnl
+                    closed.append({**pos, "exit_price": data[sym]["close"].iloc[i], "exit_reason": "EOD"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+            break
+
+        # Exits
+        for tid in list(positions.keys()):
+            pos = positions.get(tid)
+            if not pos:
+                continue
+            sym = pos["symbol"]
+            if sym not in data or i >= len(data[sym]):
+                continue
+            row = data[sym].iloc[i]
+            pos["candles_held"] += 1
+
+            if pos["strategy"] == "S1":
+                r5 = row.get("rsi5_5m")
+                is_short = pos.get("side") == "SHORT"
+
+                def calc_pnl(entry, exit, qty):
+                    return (entry - exit) * qty if is_short else (exit - entry) * qty
+
+                # Stop-loss: ABOVE for short, BELOW for long
+                sl_hit = row["close"] >= pos["stop_loss"] if is_short else row["close"] <= pos["stop_loss"]
+                if sl_hit:
+                    pos["realized_pnl"] += calc_pnl(pos["entry_price"], row["close"], pos["remaining"])
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "DISASTER_SL"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+                    continue
+                if hour >= 15:
+                    pos["realized_pnl"] += calc_pnl(pos["entry_price"], row["close"], pos["remaining"])
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "HARD_3PM"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+                    continue
+                if pos["candles_held"] >= 75:
+                    pos["realized_pnl"] += calc_pnl(pos["entry_price"], row["close"], pos["remaining"])
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "TIME75"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+                    continue
+                # VWAP exit: for LONG touch from below, for SHORT drop from above
+                vwap_exit_cond = (row["close"] <= row["vwap"]) if is_short else (row["close"] >= row["vwap"])
+                if not pos.get("vwap_exit_done") and vwap_exit_cond:
+                    eq = int(pos["initial_qty"] * 0.6)
+                    eq = min(eq, pos["remaining"])
+                    if eq > 0:
+                        pos["realized_pnl"] += calc_pnl(pos["entry_price"], row["close"], eq)
+                        pos["remaining"] -= eq
+                        pos["vwap_exit_done"] = True
+                        if pos["remaining"] <= 0:
+                            closed.append({**pos, "exit_price": row["close"], "exit_reason": "VWAP60"})
+                            sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                            del positions[tid]
+                            continue
+                # RSI exit: for LONG >50, for SHORT <50
+                rsi_exit_cond = (not pd.isna(r5) and r5 <= 50) if is_short else (not pd.isna(r5) and r5 >= 50)
+                if rsi_exit_cond:
+                    pos["realized_pnl"] += calc_pnl(pos["entry_price"], row["close"], pos["remaining"])
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "RSI5_50"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+
+            elif pos["strategy"] == "S3":
+                r9 = row.get("rsi9_5m")
+                if row["close"] <= pos["stop_loss"]:
+                    pos["realized_pnl"] += (row["close"] - pos["entry_price"]) * pos["remaining"]
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "S3_SL"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+                    continue
+                if hour > 14 or (hour == 14 and minute >= 30):
+                    pos["realized_pnl"] += (row["close"] - pos["entry_price"]) * pos["remaining"]
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "S3_EXIT"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+                    continue
+                if pos["candles_held"] >= 75:
+                    pos["realized_pnl"] += (row["close"] - pos["entry_price"]) * pos["remaining"]
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "S3_TIME75"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+                    continue
+                if not pd.isna(r9) and r9 >= 50:
+                    pos["realized_pnl"] += (row["close"] - pos["entry_price"]) * pos["remaining"]
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "S3_RSI50"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+                    continue
+                if row["close"] >= row["vwap"] and pos.get("entered_below_vwap"):
+                    pos["realized_pnl"] += (row["close"] - pos["entry_price"]) * pos["remaining"]
+                    closed.append({**pos, "exit_price": row["close"], "exit_reason": "S3_VWAP"})
+                    sector_count[pos["sector"]] = max(0, sector_count[pos["sector"]] - 1)
+                    del positions[tid]
+
+        # S1 entries — 10:15-14:00, BULL regime only
+        now_min = hour * 60 + minute
+        s1_entry_ok = (10 * 60 + 15) <= now_min < (14 * 60)
+
+        # BEAR regime: sell overbought rallies instead of buying dips
+        if s1_entry_ok and market_regime == MarketRegime.BEAR:
+            for sym, df in data.items():
+                if i >= len(df) or i < 1:
+                    continue
+                row = df.iloc[i]
+                prev = df.iloc[i - 1]
+                curr_r5 = row.get("rsi5_5m")
+                prev_r5 = prev.get("rsi5_5m") if i > 0 else None
+                if curr_r5 is None or prev_r5 is None or pd.isna(curr_r5) or pd.isna(prev_r5):
+                    continue
+                # RSI(5) was above 80 and started dropping (downtick from overbought)
+                if not (prev_r5 > 80 and curr_r5 < prev_r5):
+                    continue
+                s1_signals += 1
+                if any(p["symbol"] == sym for p in positions.values()):
+                    continue
+                s1_pos = sum(1 for p in positions.values() if p["strategy"] == "S1")
+                if s1_pos >= 3:
+                    continue
+                sector = SECTOR_MAP.get(sym, "Other")
+                if sector_count.get(sector, 0) >= 1:
+                    continue
+                # Must be ABOVE VWAP (selling the rally)
+                if row["vwap"] > 0 and row["close"] < row["vwap"]:
+                    continue
+                # Position sizing with 3x ATR on 15-min
+                a15 = row.get("atr14_15m")
+                a = a15 if pd.notna(a15) else row["close"] * 0.01
+                sl = round(row["close"] + 3.0 * a, 2)  # Stop ABOVE for shorts
+                risk = sl - row["close"]
+                if risk <= 0:
+                    continue
+                qty = min(int(RISK_PER_TRADE / risk), int(83000 / row["close"]))
+                if qty <= 0:
+                    continue
+                trade_count += 1
+                positions[f"S1-{trade_count}"] = {
+                    "strategy": "S1", "symbol": sym, "entry_price": row["close"],
+                    "quantity": qty, "initial_qty": qty, "remaining": qty,
+                    "stop_loss": sl, "status": "open",
+                    "entry_time": ts.strftime("%H:%M"), "candles_held": 0,
+                    "realized_pnl": 0.0, "sector": sector, "side": "SHORT",
+                    "vwap_exit_done": False,
+                }
+                sector_count[sector] += 1
+
+        # CRASH regime: no entries at all
+        if market_regime == MarketRegime.CRASH:
+            s1_entry_ok = False
+
+        if s1_entry_ok and market_regime != MarketRegime.BEAR:
+            for sym, df in data.items():
+                if i >= len(df) or i < 1:
+                    continue
+                row = df.iloc[i]
+                prev = df.iloc[i - 1]
+                curr_r5 = row.get("rsi5_5m")
+                prev_r5 = prev.get("rsi5_5m")
+                if curr_r5 is None or prev_r5 is None:
+                    continue
+                if pd.isna(curr_r5) or pd.isna(prev_r5):
+                    continue
+                # RSI(5) uptick: prev < 20 AND curr > prev (rising from oversold)
+                if not (prev_r5 < 20 and curr_r5 > prev_r5):
+                    continue
+                s1_signals += 1
+                if any(p["symbol"] == sym for p in positions.values()):
+                    continue
+                s1_pos = sum(1 for p in positions.values() if p["strategy"] == "S1")
+                if s1_pos >= 3:
+                    continue
+                sector = SECTOR_MAP.get(sym, "Other")
+                if sector_count.get(sector, 0) >= 1:
+                    continue
+                # Filter 1: Daily regime check (2 of 3 conditions)
+                if not daily_regime.get(sym, True):
+                    continue
+                # Filter 2: KER(10) < 0.30 on 15-min
+                ker15 = row.get("ker10_15m")
+                if pd.notna(ker15) and ker15 >= 0.30:
+                    continue
+                # Filter 3: Price below VWAP
+                if row["vwap"] > 0 and row["close"] >= row["vwap"]:
+                    continue
+                # Filter 4: MFI(8) < 30 confirmation (optional)
+                mfi_val = row.get("mfi8_5m")
+                if pd.notna(mfi_val) and mfi_val >= 30:
+                    continue
+                # Fee floor: expected move (distance to VWAP target) must
+                # exceed N x round-trip cost, else the trade can't pay
+                if qg.get("fee_floor_mult"):
+                    qty_est = int(83000 / row["close"]) or 1
+                    rt_cost_per_share = (2 * 20.0 / qty_est) + row["close"] * 0.0008
+                    if (row["vwap"] - row["close"]) < qg["fee_floor_mult"] * rt_cost_per_share:
+                        continue
+                # 3x ATR on 15-min
+                a15 = row.get("atr14_15m")
+                a = a15 if pd.notna(a15) else row["close"] * 0.01
+                sl = round(row["close"] - 3.0 * a, 2)
+                risk = row["close"] - sl
+                if risk <= 0:
+                    continue
+                qty = min(int(RISK_PER_TRADE / risk), int(83000 / row["close"]))
+                if qty <= 0:
+                    continue
+                trade_count += 1
+                positions[f"S1-{trade_count}"] = {
+                    "strategy": "S1", "symbol": sym, "entry_price": row["close"],
+                    "quantity": qty, "initial_qty": qty, "remaining": qty,
+                    "stop_loss": sl, "status": "open",
+                    "entry_time": ts.strftime("%H:%M"), "candles_held": 0,
+                    "realized_pnl": 0.0, "sector": sector,
+                    "side": "LONG", "vwap_exit_done": False,
+                }
+                sector_count[sector] += 1
+
+        # S3 entries
+        in_prime = (hour == 10 and minute >= 15) or hour == 11
+        in_secondary = (hour == 13 and minute >= 30) or (hour == 14 and minute < 30)
+        if in_prime or in_secondary:
+            for sym, df in data.items():
+                if i >= len(df):
+                    continue
+                row = df.iloc[i]
+                r9_15 = row.get("rsi9_15m")
+                ker_15 = row.get("ker10_15m")
+                r9_5 = row.get("rsi9_5m")
+                atr_15 = row.get("atr14_15m")
+                if any(v is None or (isinstance(v, float) and pd.isna(v)) for v in [r9_15, r9_5]):
+                    continue
+                # RSI(9) < 40, KER(10) < 0.30
+                if r9_15 >= 40:
+                    continue
+                if pd.notna(ker_15) and ker_15 >= 0.30:
+                    continue
+                s3_setups += 1
+                prev_r9 = df.iloc[i-1].get("rsi9_5m") if i > 0 else None
+                if prev_r9 is None or pd.isna(prev_r9) or not (prev_r9 < 25 and r9_5 >= 25):
+                    continue
+                if row["close"] <= row["open"]:
+                    continue
+                # Below VWAP
+                if row["close"] >= row["vwap"]:
+                    continue
+                # Fee floor + minimum reward distance to the VWAP target
+                if qg.get("fee_floor_mult"):
+                    qty_est = int(83000 / row["close"]) or 1
+                    rt_cost_per_share = (2 * 20.0 / qty_est) + row["close"] * 0.0008
+                    if (row["vwap"] - row["close"]) < qg["fee_floor_mult"] * rt_cost_per_share:
+                        continue
+                if qg.get("s3_min_reward_atr"):
+                    a_ref = atr_15 if pd.notna(atr_15) else row["close"] * 0.008
+                    if (row["vwap"] - row["close"]) < qg["s3_min_reward_atr"] * a_ref:
+                        continue
+                if any(p["symbol"] == sym for p in positions.values()):
+                    continue
+                s3_pos = sum(1 for p in positions.values() if p["strategy"] == "S3")
+                if s3_pos >= 3:
+                    continue
+                a15 = atr_15 if pd.notna(atr_15) else row["close"] * 0.008
+                sl = round(row["close"] - 3.0 * a15, 2)
+                risk = row["close"] - sl
+                if risk <= 0:
+                    continue
+                mult = 0.5 if in_secondary else 1.0
+                qty = min(int(RISK_PER_TRADE * mult / risk), int(83000 / row["close"]))
+                if qty <= 0:
+                    continue
+                trade_count += 1
+                sector = SECTOR_MAP.get(sym, "Other")
+                positions[f"S3-{trade_count}"] = {
+                    "strategy": "S3", "symbol": sym, "entry_price": row["close"],
+                    "quantity": qty, "initial_qty": qty, "remaining": qty,
+                    "stop_loss": sl, "status": "open",
+                    "entry_time": ts.strftime("%H:%M"), "candles_held": 0,
+                    "realized_pnl": 0.0, "sector": sector,
+                    "entered_below_vwap": row["close"] < row["vwap"],
+                }
+                sector_count[sector] += 1
+
+    s1_trades = [t for t in closed if t["strategy"] == "S1"]
+    s3_trades = [t for t in closed if t["strategy"] == "S3"]
+    s1_pnl = sum(t["realized_pnl"] for t in s1_trades)
+    s3_pnl = sum(t["realized_pnl"] for t in s3_trades)
+    total_pnl = s1_pnl + s3_pnl
+    s1_wins = len([t for t in s1_trades if t["realized_pnl"] > 0])
+    s3_wins = len([t for t in s3_trades if t["realized_pnl"] > 0])
+
+    return {
+        "s1_signals": s1_signals, "s1_trades": len(s1_trades), "s1_wins": s1_wins,
+        "s1_pnl": s1_pnl, "s1_details": s1_trades,
+        "s3_setups": s3_setups, "s3_trades": len(s3_trades), "s3_wins": s3_wins,
+        "s3_pnl": s3_pnl, "s3_details": s3_trades,
+        "total_pnl": total_pnl,
+    }
+
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python simulate_range.py 2026-02-03 2026-02-13")
+        return
+
+    start = date.fromisoformat(sys.argv[1])
+    end = date.fromisoformat(sys.argv[2])
+    days = get_trading_days(start, end)
+
+    print(f"{'='*80}")
+    print(f"  AutoTheta Range Simulation v2.1: {start} to {end} ({len(days)} trading days)")
+    print(f"{'='*80}")
+
+    # Auth
+    api = SmartConnect(os.getenv("ANGEL_API_KEY"))
+    totp = pyotp.TOTP(os.getenv("ANGEL_TOTP_SECRET")).now()
+    api.generateSession(os.getenv("ANGEL_CLIENT_ID"), os.getenv("ANGEL_PASSWORD"), totp)
+
+    with open(PROJECT_ROOT / "data" / "instruments.json") as f:
+        master = json.load(f)
+    mdf = pd.DataFrame(master)
+    token_map = {}
+    for sym in STOCKS:
+        m = mdf[(mdf["symbol"] == sym) & (mdf["exch_seg"] == "NSE")]
+        if not m.empty:
+            token_map[sym] = m.iloc[0]["token"]
+
+    print(f"  {len(token_map)} stocks | Fetching data...")
+
+    # Fetch Nifty daily data for regime classification
+    print("  Fetching Nifty daily data for regime...")
+    nifty_daily_df = fetch_nifty_daily(api, end)
+    if nifty_daily_df is not None:
+        print(f"  Got {len(nifty_daily_df)} daily candles\n")
+    else:
+        print("  Could not fetch daily data — regime defaults to BULL\n")
+        nifty_daily_df = None
+
+    results = {}
+    for d in days:
+        ds = d.isoformat()
+        sys.stdout.write(f"  {ds} ({d.strftime('%A')[:3]})... ")
+        sys.stdout.flush()
+        data, day_regime, mkt_regime, regime_det = fetch_day(api, token_map, d, nifty_daily_df)
+        if not data:
+            print("HOLIDAY/NO DATA")
+            continue
+        r = simulate_one_day(data, day_regime, mkt_regime, regime_det)
+        if r:
+            r["regime"] = mkt_regime.value if mkt_regime else "BULL"
+            results[ds] = r
+            total = r["s1_trades"] + r["s3_trades"]
+            regime_tag = mkt_regime.value if mkt_regime else "?"
+            dma_d = regime_det.get("dma_dist_pct", "?") if regime_det else "?"
+            print(f"[{regime_tag}] S1:{r['s1_trades']}t/{r['s1_signals']}s S3:{r['s3_trades']}t/{r['s3_setups']}s | DMA:{dma_d}% | P&L: Rs{r['total_pnl']:+,.2f}")
+        else:
+            print("NO DATA")
+
+    # ── Summary Table ──
+    print(f"\n{'='*80}")
+    print(f"  RESULTS v2.1: {start} to {end}")
+    print(f"{'='*80}")
+    print()
+    print(f"  {'Date':12s} {'Day':4s} {'S1 Sig':>7s} {'S1 Trd':>7s} {'S1 W/L':>7s} {'S1 P&L':>10s} {'S3 Set':>7s} {'S3 Trd':>7s} {'S3 W/L':>7s} {'S3 P&L':>10s} {'TOTAL':>10s}")
+    print(f"  {'─'*76}")
+
+    cum_pnl = 0
+    total_s1_trades = 0
+    total_s1_wins = 0
+    total_s3_trades = 0
+    total_s3_wins = 0
+    total_s1_pnl = 0
+    total_s3_pnl = 0
+
+    for ds, r in results.items():
+        d = date.fromisoformat(ds)
+        day_name = d.strftime("%a")
+        s1_wl = f"{r['s1_wins']}/{r['s1_trades']-r['s1_wins']}" if r["s1_trades"] else "—"
+        s3_wl = f"{r['s3_wins']}/{r['s3_trades']-r['s3_wins']}" if r["s3_trades"] else "—"
+        cum_pnl += r["total_pnl"]
+
+        total_s1_trades += r["s1_trades"]
+        total_s1_wins += r["s1_wins"]
+        total_s3_trades += r["s3_trades"]
+        total_s3_wins += r["s3_wins"]
+        total_s1_pnl += r["s1_pnl"]
+        total_s3_pnl += r["s3_pnl"]
+
+        print(f"  {ds:12s} {day_name:4s} {r['s1_signals']:>7d} {r['s1_trades']:>7d} {s1_wl:>7s} {r['s1_pnl']:>+10,.2f} "
+              f"{r['s3_setups']:>7d} {r['s3_trades']:>7d} {s3_wl:>7s} {r['s3_pnl']:>+10,.2f} {r['total_pnl']:>+10,.2f}")
+
+    print(f"  {'─'*76}")
+    s1_wr = f"{total_s1_wins}/{total_s1_trades-total_s1_wins}" if total_s1_trades else "—"
+    s3_wr = f"{total_s3_wins}/{total_s3_trades-total_s3_wins}" if total_s3_trades else "—"
+    print(f"  {'TOTAL':12s} {'':4s} {'':>7s} {total_s1_trades:>7d} {s1_wr:>7s} {total_s1_pnl:>+10,.2f} "
+          f"{'':>7s} {total_s3_trades:>7d} {s3_wr:>7s} {total_s3_pnl:>+10,.2f} {cum_pnl:>+10,.2f}")
+
+    pnl_pct = (cum_pnl / CAPITAL) * 100
+    print(f"\n  Capital: Rs{CAPITAL:,} → Rs{CAPITAL + cum_pnl:,.2f} ({pnl_pct:+.2f}%)")
+    total_trades = total_s1_trades + total_s3_trades
+    total_wins = total_s1_wins + total_s3_wins
+    if total_trades:
+        print(f"  Total trades: {total_trades} | Win rate: {total_wins}/{total_trades} ({total_wins/total_trades*100:.0f}%)")
+        avg_win = cum_pnl / total_trades
+        print(f"  Avg P&L per trade: Rs{avg_win:+,.2f}")
+    print(f"\n  Trade Details:")
+    for ds, r in results.items():
+        for t in r["s1_details"] + r["s3_details"]:
+            m = "W" if t["realized_pnl"] > 0 else "L"
+            print(f"    [{m}] {ds} {t['entry_time']:>5s} {t['strategy']:3s} {t['symbol']:15s} "
+                  f"Rs{t['entry_price']:.2f} → {t['exit_price']:.2f} | {t['exit_reason']:8s} | Rs{t['realized_pnl']:+,.2f}")
+
+    print(f"\n{'='*80}")
+
+
+if __name__ == "__main__":
+    main()

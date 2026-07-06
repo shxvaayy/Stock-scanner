@@ -1,0 +1,195 @@
+# ═══════════════════════════════════════════════
+# AutoTheta v2.1 — Filter Stack Redesign Config
+# ═══════════════════════════════════════════════
+
+bot:
+  paper_mode: true
+  db_path: "data/trades.db"
+  log_level: "INFO"
+
+broker:
+  provider: "angelone"
+  # These are loaded from .env — do NOT put secrets here
+  api_key: "${ANGEL_API_KEY}"
+  client_code: "${ANGEL_CLIENT_ID}"
+  mpin: "${ANGEL_PASSWORD}"
+  totp_secret: "${ANGEL_TOTP_SECRET}"
+
+# Global risk limits (across ALL strategies)
+risk:
+  max_daily_loss: 15000         # Rs 15K total daily loss cap
+  max_total_exposure: 500000    # Rs 5L total position value
+
+# VIX regime sizing (checked once at startup)
+vix:
+  full_threshold: 18            # VIX < 18: full size
+  half_threshold: 22            # VIX 18-22: half size (Rs 1,250 risk)
+  suspend_above: 22             # VIX > 22: no trades
+
+# ─── Strategy Definitions ───
+strategies:
+
+  # ━━━ Strategy 1: RSI(5) Mean Reversion on 5-min Candles (v2.1) ━━━
+  # DISABLED 2026-06-12: 12-month backtest with fees = -Rs 255,200 (1,835
+  # trades, 18% WR; gross-negative even before costs). Intraday RSI scalping
+  # on large caps cannot clear Indian transaction costs. Replaced by
+  # rsi2_swing below (the falling-knife entry bug is fixed in code anyway).
+  - strategy:
+      name: "RSI5_MeanRevert_5min"
+      type: "rsi_bounce"
+      enabled: false
+    parameters:
+      rsi_period: 5                    # RSI(5) on 5-min candles
+      oversold_threshold: 20           # Entry when RSI < 20
+      entry_confirmation: "uptick"     # RSI must be rising (not hook above threshold)
+      exit_rsi: 50                     # 40% position exits at RSI(5) > 50
+      atr_sl_multiplier: 3.0           # 3x ATR(14) on 15-min = disaster stop only
+      time_stop_minutes: 75            # 75-minute time stop
+      entry_start: "10:15"             # No entries before 10:15 AM
+      entry_end: "14:00"               # No entries after 2:00 PM
+      hard_exit: "15:00"               # Close everything by 3:00 PM
+      max_positions: 3                 # Max 3 concurrent positions
+      max_per_sector: 1                # Max 1 per sector
+      regime_filter: "daily_2of3"      # 2 of 3: EMA proximity, RSI range, ADX
+      intraday_regime: "ker"           # Kaufman Efficiency Ratio
+      ker_period: 10
+      ker_max: 0.30                    # Only trade when KER < 0.30
+      vwap_rule: "below"               # Price must be below VWAP (removed distance bounds)
+      vwap_exit_pct: 60               # Exit 60% of position at VWAP touch
+      mfi_period: 8
+      mfi_threshold: 30               # MFI < 30 confirmation
+    risk:
+      capital_allocation: 250000       # Rs 2.5L allocated
+      risk_per_trade_pct: 1.0          # Max 1% risk per trade (Rs 2,500)
+      daily_loss_cap: 7500             # Rs 7,500 daily cap for this strategy
+      max_positions: 3
+      max_consecutive_losses: 3        # Cooldown after 3 losses in a row
+      cooldown_minutes: 30             # 30-min cooldown
+
+  # ━━━ Strategy 2: Expiry Skew — rich-side credit VERTICAL (restructured) ━━━
+  # 2026-06-12: symmetric condor backtested -Rs 3,644 over 12 expiries (25%
+  # WR). Restructured per 0DTE research: sell only the rich side (credit
+  # spread, 2 legs = half the brokerage) + trend-day gates. Backtest of the
+  # new structure is only weakly positive on a thin sample — keep on paper
+  # until ~8 live expiries confirm.
+  - strategy:
+      name: "Expiry_OTM_Skew"
+      type: "expiry_skew"
+      enabled: true
+    parameters:
+      structure: "rich_side_vertical"  # sell ONLY the expensive side
+      max_range_pct_by_entry: 0.8      # skip if day range > 0.8% by 2 PM
+      max_vwap_dist_pct: 0.3           # skip if spot > 0.3% from session VWAP
+      otm_offset: 50                   # 50 points OTM from ATM
+      wing_width: 100                  # protection wing
+      min_skew_ratio: 2.0              # Min put/call premium ratio
+      sl_multiplier: 2.0               # SL at 2x entry premium
+      entry_hour: 14                   # Enter at 2:00 PM IST
+      entry_minute: 0
+      exit_hour: 15                    # Hard exit at 3:15 PM IST
+      exit_minute: 15
+      monitor_interval: 30             # Check every 30 seconds
+      lot_size: 65                     # Nifty lot size (Jan 2026+)
+      vix_min: 12                      # Only trade when VIX 12-18
+      vix_max: 18
+    risk:
+      capital_allocation: 250000
+      risk_per_trade_pct: 1.0
+      daily_loss_cap: 7500
+      max_positions: 1                 # Only 1 iron condor at a time
+      max_consecutive_losses: 3
+      cooldown_minutes: 0              # No cooldown (weekly strategy)
+
+  # ━━━ Strategy 3: Multi-Timeframe RSI Mean Reversion (v2.1) ━━━
+  # DISABLED 2026-06-12: 12-month backtest with fees = -Rs 53,166 (392
+  # trades, 26% WR, gross-negative). Same verdict as rsi_bounce: the
+  # intraday RSI mean-reversion class cannot clear costs on this universe.
+  - strategy:
+      name: "RSI_15min_MeanRevert"
+      type: "rsi_15min"
+      enabled: false
+    parameters:
+      setup_rsi_period: 9             # RSI(9) on 15-min chart (Connie Brown)
+      setup_rsi_threshold: 40         # Connie Brown: oversold in bull = 40
+      entry_rsi_period: 9             # RSI(9) on 5-min chart
+      entry_rsi_threshold: 25         # Entry when 5-min RSI crosses back above 25
+      exit_rsi_threshold: 50          # Exit when 5-min RSI > 50
+      ker_period: 10                  # Kaufman Efficiency Ratio (replaces ADX)
+      ker_max: 0.30                   # Only trade when KER < 0.30 (choppy)
+      mfi_period: 8                   # Money Flow Index period
+      mfi_threshold: 30               # MFI < 30 confirmation
+      atr_sl_mult: 3.0               # Disaster stop: 3x ATR(14) on 15-min
+      time_stop_minutes: 75           # 75-min time window
+      max_positions: 3
+      max_per_sector: 1
+      prime_window_start: "10:15"
+      prime_window_end: "12:00"
+      secondary_window_start: "13:30"
+      secondary_window_end: "14:30"
+      secondary_size_mult: 0.5        # Half size in secondary window
+    risk:
+      capital_allocation: 250000
+      risk_per_trade_pct: 1.0
+      daily_loss_cap: 7500
+
+  # ━━━ Strategy 4: Connors RSI-2 Daily Swing + Alvarez limit entry ━━━
+  # ENABLED 2026-06-12 (paper): the one strategy that PASSED out-of-sample
+  # validation. Train (Nov 2024 - Jan 2026): +Rs 8,503, 86 trades, 55% WR.
+  # Held-out test (Feb - Jun 2026): +Rs 24,720, 33 trades, 67% WR.
+  # Robust across dip parameter (2/3/4% all positive on train).
+  # Holds overnight (CNC delivery). Documented rules: Connors RSI-2 +
+  # Alvarez next-day limit-dip entry.
+  - strategy:
+      name: "RSI2_Swing"
+      type: "rsi2_swing"
+      enabled: true
+    parameters:
+      entry_rsi: 10                   # daily RSI(2) < 10, close > SMA200
+      limit_dip_pct: 2.0              # next-day limit at signal close x 0.98
+      exit_rsi: 65                    # exit close: RSI(2) > 65
+      exit_on_sma5: true              # ... or close > SMA5
+      max_hold_sessions: 10
+      max_positions: 5
+      position_rs: 83000              # Rs per position
+      eod_scan_time: "15:20"
+    risk:
+      capital_allocation: 415000      # 5 x 83k
+      daily_loss_cap: 15000
+      max_positions: 5
+      max_consecutive_losses: 5
+      cooldown_minutes: 0             # daily strategy
+
+  # ━━━ Strategy 5: VP Trend (Dalton breakout + CVD) — paper only ━━━
+  # 2026-06-12: rebuilt from the fade variant (which had no edge: PF 0.4)
+  # to volume-gated VA-boundary breakout with CVD agreement + one trade per
+  # direction per day. Positive on every good-volume window (+Rs 2,264
+  # combined) but only 7 trades — INSUFFICIENT EVIDENCE. Needs real
+  # front-month futures volume; keep disabled until paper-validated.
+  - strategy:
+      name: "VP_Trend"
+      type: "vp_trend"
+      enabled: false
+    parameters:
+      mode: "breakout"                # never fade; go with accepted breaks
+      cvd_gate: true                  # CVD slope must agree with direction
+      acceptance_volume_mult: 1.5     # break bar vol >= 1.5x 20-bar avg
+      max_trades_per_direction: 1
+
+  # ━━━ Strategy 6: Liquidity Sweep — DISABLED (no edge found) ━━━
+  # 2026-06-12 verdicts on train data: sweep-reversal 14-50% WR negative;
+  # break-continuation -Rs 2,342 (best variant, PDH/PDL only); Raschke
+  # 80-20 -Rs 5,295. Every variant of fading or following swept levels on
+  # Nifty intraday options failed. Slot retired until a new thesis exists.
+  - strategy:
+      name: "Liquidity_Sweep"
+      type: "liquidity_sweep"
+      enabled: false
+
+  # ━━━ Strategy 7: RSI Failed-Swing Predictor — DISABLED ━━━
+  # 2026-06-12: universe-expanded to 59 stocks (15 trades/8mo vs 1/4mo) but
+  # still net -Rs 2,214, 53% WR. The daily W-bottom concept is already
+  # better captured by RSI2_Swing. Disabled.
+  - strategy:
+      name: "RSI_Predictor"
+      type: "rsi_predictor"
+      enabled: false
