@@ -3,12 +3,45 @@
 
 import json
 import os
+import threading
 
 from flask import Flask, jsonify, request, send_from_directory
 
 import scanner
 
 app = Flask(__name__, static_folder="static")
+
+# Long scans (5-10 min) exceed hosted proxies' request timeout (Render ~100s),
+# so they run as background jobs and the UI polls /api/job/<name>.
+_jobs = {}
+_jobs_lock = threading.Lock()
+
+
+def _start_job(name, fn):
+    with _jobs_lock:
+        j = _jobs.get(name)
+        if j and j["status"] == "running":
+            return False
+        _jobs[name] = {"status": "running", "result": None, "error": None}
+
+    def run():
+        try:
+            result = fn()
+            with _jobs_lock:
+                _jobs[name] = {"status": "done", "result": result, "error": None}
+        except Exception as e:
+            with _jobs_lock:
+                _jobs[name] = {"status": "error", "result": None, "error": str(e)}
+
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
+@app.get("/api/job/<name>")
+def api_job(name):
+    with _jobs_lock:
+        j = _jobs.get(name)
+    return jsonify(j or {"status": "none"})
 
 
 @app.get("/")
@@ -27,10 +60,8 @@ def api_last():
 
 @app.post("/api/scan")
 def api_scan():
-    try:
-        return jsonify(scanner.run_scan())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    _start_job("scan", scanner.run_scan)
+    return jsonify({"status": "running"})
 
 
 @app.get("/api/report")
@@ -111,7 +142,10 @@ def api_movers():
                 with open(scanner.MOVERS_FILE) as f:
                     return jsonify(json.load(f))
             return jsonify(None)
-        return jsonify(scanner.top_movers(force=bool(request.args.get("force"))))
+        if request.args.get("force"):
+            _start_job("movers", lambda: scanner.top_movers(force=True))
+            return jsonify({"status": "running"})
+        return jsonify(scanner.top_movers(force=False))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

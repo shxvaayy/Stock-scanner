@@ -677,9 +677,15 @@ async function loadMovers(force) {
       `<div class="empty">Poora Indian market scan ho raha hai — NSE + BSE ~7000 stocks ka 1 saal ka data. 5–10 minute lagenge, chai le aao ☕</div>`;
   }
   try {
-    const url = force ? "/api/movers?force=1" : "/api/movers?cached_only=1";
-    const d = await (await fetch(url)).json();
-    if (d && !d.error) renderMovers(d);
+    let d;
+    if (force) {
+      await fetch("/api/movers?force=1");
+      d = await pollJob("movers");
+    } else {
+      d = await (await fetch("/api/movers?cached_only=1")).json();
+    }
+    if (d && d.error) throw new Error(d.error);
+    if (d) renderMovers(d);
   } catch (e) {
     if (force) document.getElementById("moversCard").innerHTML = `<div class="empty">⚠ Scan failed: ${esc(e.message)}</div>`;
   } finally {
@@ -749,8 +755,8 @@ async function runScan() {
   btn.disabled = true;
   btn.innerHTML = `<span class="spin"></span>Scanning full market…`;
   try {
-    const res = await fetch("/api/scan", { method: "POST" });
-    const d = await res.json();
+    await fetch("/api/scan", { method: "POST" });
+    const d = await pollJob("scan");
     if (d.error) alert("Scan failed: " + d.error);
     else renderScan(d);
   } catch (e) {
@@ -758,6 +764,18 @@ async function runScan() {
   } finally {
     btn.disabled = false;
     btn.textContent = "Run Scan";
+  }
+}
+
+/* Poll a background job on the server until it finishes (long scans
+   can't run inside one HTTP request on hosted proxies like Render). */
+async function pollJob(name) {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 4000));
+    const j = await (await fetch("/api/job/" + name)).json();
+    if (j.status === "done") return j.result;
+    if (j.status === "error") return { error: j.error };
+    if (j.status === "none") return { error: "job lost — try again" };
   }
 }
 
