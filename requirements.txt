@@ -1,0 +1,7 @@
+flask
+gunicorn
+pandas
+yfinance
+requests
+beautifulsoup4
+curl_cffi
