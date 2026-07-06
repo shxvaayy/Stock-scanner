@@ -737,6 +737,34 @@ def top_movers(force=False):
 
 # ---------------- News ----------------
 
+_name_cache = {}
+
+
+def company_name(sym):
+    """Long company name from Yahoo (cached) — makes news search relevant."""
+    if sym not in _name_cache:
+        try:
+            info = yf.Ticker(yahoo_symbol(sym)).info or {}
+            _name_cache[sym] = info.get("longName") or info.get("shortName") or ""
+        except Exception:
+            _name_cache[sym] = ""
+    return _name_cache[sym]
+
+
+_GENERIC_WORDS = {"limited", "ltd", "india", "industries", "company", "corporation",
+                  "enterprises", "solutions", "services", "systems", "technologies",
+                  "the", "and", "of"}
+
+
+def _name_keywords(sym):
+    """Distinctive words to match headlines against (symbol + company name)."""
+    words = {sym.lower()}
+    for w in re.split(r"\W+", company_name(sym).lower()):
+        if len(w) > 3 and w not in _GENERIC_WORDS:
+            words.add(w)
+    return words
+
+
 def _google_news(sym):
     """Latest Indian market news via Google News RSS (what Groww-style feeds use)."""
     import urllib.request
@@ -744,7 +772,8 @@ def _google_news(sym):
     import xml.etree.ElementTree as ET
     from email.utils import parsedate_to_datetime
 
-    q = urllib.parse.quote(f'"{sym}" share price NSE')
+    name = company_name(sym)
+    q = urllib.parse.quote(f'"{name}" stock' if name else f'"{sym}" share price NSE')
     url = (f"https://news.google.com/rss/search?q={q}+when:14d"
            f"&hl=en-IN&gl=IN&ceid=IN:en")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -806,6 +835,7 @@ def _yahoo_news(sym):
 
 def stock_news(symbol):
     """Latest news for one stock: Google News India + Yahoo Finance, merged,
+    relevance-filtered (headline must mention the company), recent-only,
     deduped and sorted newest-first."""
     sym = _clean_symbol(symbol)
     items = []
@@ -815,8 +845,24 @@ def stock_news(symbol):
         pass
     items += _yahoo_news(sym)
 
+    keywords = _name_keywords(sym)
+    max_age = datetime.now(IST).timestamp() - 14 * 86400
+
+    def relevant(n):
+        if n.get("ts") and n["ts"] < max_age:
+            return False  # stale — "latest news" should be days old, not months
+        title = n["title"].lower()
+        return any(w in title for w in keywords)
+
+    filtered = [n for n in items if relevant(n)]
+    # tiny companies sometimes have zero exact-match headlines — fall back to
+    # recent unfiltered items rather than showing nothing
+    if len(filtered) < 3:
+        fresh = [n for n in items if not n.get("ts") or n["ts"] >= max_age]
+        filtered = filtered + [n for n in fresh if n not in filtered]
+
     seen, unique = set(), []
-    for n in sorted(items, key=lambda n: n.get("ts", 0), reverse=True):
+    for n in sorted(filtered, key=lambda n: n.get("ts", 0), reverse=True):
         key = re.sub(r"\W+", "", n["title"].lower())[:60]
         if key in seen:
             continue
@@ -850,95 +896,152 @@ def news_sentiment(news_items):
     return ((pos - neg) / total if total else 0.0), pos, neg
 
 
-def predict_series(symbol, horizon=15):
-    """Factor-model forecast for the next `horizon` sessions.
+_FEATURES = [
+    ("Trend structure", "price vs SMA20 vs SMA50 alignment"),
+    ("SMA20 stretch", "how far price is stretched from its 20-day average"),
+    ("RSI momentum", "RSI distance from neutral 50"),
+    ("Overbought/oversold", "RSI beyond 70/30 — reversal pressure"),
+    ("Volume trend", "today's volume vs 20-day average"),
+    ("5d momentum", "return over the last 5 sessions"),
+    ("20d momentum", "return over the last 20 sessions"),
+    ("52W position", "distance from the 52-week high"),
+    ("Nifty regime", "index above/below its 50-day average"),
+]
 
-    Combines trend (SMA structure), RSI momentum/mean-reversion, volume
-    participation, 52-week position, 20-day momentum, Nifty regime and news
-    sentiment into a daily drift, then projects a path with a widening
-    uncertainty band from the stock's own average daily range.
-    Educational estimate — NOT a guarantee.
+
+def _feature_matrix(df, nifty_up_series):
+    """Daily feature rows aligned with next-day returns. Pure pandas/maths."""
+    close, vol = df["Close"], df["Volume"]
+    sma20 = close.rolling(20).mean()
+    sma50 = close.rolling(50).mean()
+    rsi = wilder_rsi(close)
+    vol20 = vol.rolling(20).mean()
+
+    feats = pd.DataFrame(index=df.index)
+    feats["trend"] = ((close > sma20) & (sma20 > sma50)).astype(float) - \
+                     ((close < sma20) & (sma20 < sma50)).astype(float)
+    feats["stretch"] = ((close - sma20) / sma20 * 100).clip(-15, 15)
+    feats["rsi_dev"] = (rsi - 50) / 25
+    feats["ob_os"] = ((rsi - 70).clip(lower=0) - (30 - rsi).clip(lower=0)) / 10
+    feats["vol_tr"] = (vol / vol20).clip(0, 4) - 1
+    feats["mom5"] = close.pct_change(5).clip(-0.25, 0.25) * 100
+    feats["mom20"] = close.pct_change(20).clip(-0.5, 0.5) * 100
+    feats["pos52"] = (close / close.rolling(250, min_periods=60).max() - 1) * 100
+    feats["nifty"] = nifty_up_series.reindex(df.index).ffill().fillna(0)
+
+    target = close.pct_change().shift(-1) * 100  # next-day return %
+    return feats, target
+
+
+def _ridge_fit(X, y, lam=8.0):
+    """Ridge regression via normal equations — no sklearn needed."""
+    import numpy as np
+    Xb = np.hstack([X, np.ones((X.shape[0], 1))])
+    A = Xb.T @ Xb + lam * np.eye(Xb.shape[1])
+    A[-1, -1] -= lam  # don't penalise the intercept
+    beta = np.linalg.solve(A, Xb.T @ y)
+    return beta[:-1], beta[-1]
+
+
+def predict_series(symbol, horizon=15):
+    """Statistical forecast for the next `horizon` sessions.
+
+    A ridge regression is fitted on THIS stock's own past year of data
+    (9 technical features -> next-day return), walk-forward backtested on the
+    most recent 60 sessions so the accuracy shown is out-of-sample, then
+    refitted on everything for the live forecast. The uncertainty band comes
+    from the empirical quantiles of the model's own residuals. News sentiment
+    is applied as a small post-model adjustment. Educational — NOT a guarantee.
     """
+    import numpy as np
+
     snap = analyze_stock(symbol)
     m = snap["metrics"]
+    price = snap["price"]
     news = stock_news(symbol)
     senti, pos_hits, neg_hits = news_sentiment(news["news"])
 
-    price = snap["price"]
+    sym = snap["symbol"]
+    df = flatten(yf.download(yahoo_symbol(sym), period="2y", interval="1d",
+                             auto_adjust=True, progress=False)).dropna()
+    if len(df) < 130:
+        raise ValueError(f"Not enough history for a statistical model on '{sym}'")
+
+    ndf = flatten(yf.download("^NSEI", period="2y", interval="1d",
+                              auto_adjust=True, progress=False)).dropna()
+    nifty_up = ((ndf["Close"] > ndf["Close"].rolling(50).mean()).astype(float) * 2 - 1)
+
+    feats, target = _feature_matrix(df, nifty_up)
+    valid = feats.dropna().index.intersection(target.dropna().index)
+    X_all = feats.loc[valid].to_numpy(dtype=float)
+    y_all = target.loc[valid].to_numpy(dtype=float)
+
+    # standardise features so ridge treats them equally
+    mu, sd = X_all.mean(axis=0), X_all.std(axis=0)
+    sd[sd == 0] = 1
+    Xz = (X_all - mu) / sd
+
+    # ---- walk-forward backtest on the last 60 sessions (out-of-sample) ----
+    n_test = min(60, len(Xz) // 4)
+    hits = 0
+    abs_errs = []
+    for i in range(len(Xz) - n_test, len(Xz)):
+        b, c = _ridge_fit(Xz[:i], y_all[:i])
+        pred = float(Xz[i] @ b + c)
+        actual = y_all[i]
+        if pred * actual > 0:
+            hits += 1
+        abs_errs.append(abs(pred - actual))
+    hit_rate = round(hits / n_test * 100, 1) if n_test else None
+    mae = round(float(np.mean(abs_errs)), 2) if abs_errs else None
+
+    # ---- final fit on all data for the live forecast ----
+    beta, intercept = _ridge_fit(Xz, y_all)
+    resid = y_all - (Xz @ beta + intercept)
+    lo_q, hi_q = np.percentile(resid, [10, 90])
+
+    x_today_raw = feats.iloc[-1].to_numpy(dtype=float)
+    x_today = (x_today_raw - mu) / sd
+    contribs = x_today * beta
+    drift = float(x_today @ beta + intercept)
+
+    # news sentiment: small post-model nudge (no historical news to train on)
+    senti_impact = max(-0.06, min(0.06, senti * 0.06))
+    drift += senti_impact
+
+    # sanity guards: parabolic blow-off and hard cap — models extrapolate badly
+    rsi_now = m["rsi"]
+    mom20_now = float(x_today_raw[6])
+    guard_note = None
+    if rsi_now >= 80 and mom20_now > 30 and drift > 0:
+        drift = min(drift, 0.0)
+        guard_note = (f"RSI {rsi_now} + {mom20_now:.0f}% in 20 sessions is blow-off "
+                      "territory — bullish drift zeroed out (history says chase = trap)")
+    drift = max(-0.5, min(0.5, drift))
+
     factors = []
+    for (name, note), c in zip(_FEATURES, contribs):
+        factors.append({"name": name, "impact": round(float(c), 3),
+                        "note": f"{note} — learned from this stock's own history"})
+    factors.append({"name": "News sentiment", "impact": round(senti_impact, 3),
+                    "note": f"{pos_hits} positive / {neg_hits} negative signals in latest headlines"
+                            if (pos_hits or neg_hits) else "no strong signal in recent headlines"})
+    if guard_note:
+        factors.append({"name": "Blow-off guard", "impact": 0.0, "note": guard_note})
+    factors.sort(key=lambda f: abs(f["impact"]), reverse=True)
 
-    def add(name, impact, note):
-        factors.append({"name": name, "impact": round(impact, 3), "note": note})
-        return impact
-
-    drift = 0.0
-    if price > m["sma20"] > m["sma50"]:
-        drift += add("Trend", 0.15, "price > SMA20 > SMA50 — uptrend structure")
-    elif price < m["sma20"] < m["sma50"]:
-        drift += add("Trend", -0.15, "price < SMA20 < SMA50 — downtrend structure")
-    else:
-        add("Trend", 0.0, "mixed SMA structure — no clear trend")
-
-    rsi = m["rsi"]
-    if rsi >= 70:
-        drift += add("RSI", -0.10, f"RSI {rsi} overbought — pullback risk")
-    elif rsi >= 55:
-        drift += add("RSI", 0.08, f"RSI {rsi} — bullish momentum zone")
-    elif rsi > 45:
-        add("RSI", 0.0, f"RSI {rsi} — neutral")
-    elif rsi > 30:
-        drift += add("RSI", -0.08, f"RSI {rsi} — bearish pressure")
-    else:
-        drift += add("RSI", 0.10, f"RSI {rsi} oversold — bounce candidate")
-
-    trend_sign = 1 if drift >= 0 else -1
-    if m["vol_ratio"] >= 2:
-        drift += add("Volume", 0.05 * trend_sign,
-                     f"{m['vol_ratio']}× avg volume — strong participation")
-    elif m["vol_ratio"] >= 1.3:
-        drift += add("Volume", 0.03 * trend_sign,
-                     f"{m['vol_ratio']}× avg volume — above average")
-    else:
-        add("Volume", 0.0, f"{m['vol_ratio']}× avg volume — low conviction")
-
-    from_high = price / snap["year_high"] - 1
-    from_low = price / snap["year_low"] - 1
-    if from_high > -0.03:
-        drift += add("52W position", 0.05, "within 3% of 52w high — breakout zone")
-    elif from_low < 0.03:
-        drift += add("52W position", -0.05, "near 52w low — falling-knife zone")
-    else:
-        add("52W position", 0.0, f"{from_high * 100:.0f}% below 52w high")
-
-    hist = [pt["c"] for pt in snap["chart"]]
-    if len(hist) >= 21:
-        mom20 = (hist[-1] / hist[-21] - 1) * 100
-        mom_impact = max(-0.10, min(0.10, mom20 / 20 * 0.3))
-        drift += add("20d momentum", mom_impact, f"{mom20:+.1f}% over last 20 sessions")
-
-    if snap["nifty_trend"] == "UP":
-        drift += add("Nifty regime", 0.04, "Nifty above 50-DMA — supportive market")
-    else:
-        drift += add("Nifty regime", -0.04, "Nifty below 50-DMA — headwind")
-
-    senti_impact = max(-0.12, min(0.12, senti * 0.12))
-    drift += add("News sentiment", senti_impact,
-                 f"{pos_hits} positive / {neg_hits} negative signals in latest headlines"
-                 if (pos_hits or neg_hits) else "no strong signal in recent headlines")
-
-    drift = max(-0.4, min(0.4, drift))  # cap: no model knows better than ±0.4%/day
-
-    daily_sigma = max(m["avg_range_pct"], 0.5) * 0.6 / 100
+    # ---- project the path; signal decays, band widens with sqrt(time) ----
     points = []
     mid = price
     for t in range(1, horizon + 1):
-        mid = mid * (1 + drift / 100)
-        band = price * daily_sigma * math.sqrt(t)
+        mid = mid * (1 + (drift * (0.88 ** (t - 1))) / 100)
+        lo_band = price * abs(lo_q) / 100 * math.sqrt(t)
+        hi_band = price * abs(hi_q) / 100 * math.sqrt(t)
         points.append({"d": f"+{t}d", "mid": round(mid, 2),
-                       "lo": round(mid - band, 2), "hi": round(mid + band, 2)})
+                       "lo": round(mid - lo_band, 2), "hi": round(mid + hi_band, 2)})
 
     return {
-        "symbol": snap["symbol"],
+        "symbol": sym,
         "last_close": price,
         "as_of": snap["as_of"],
         "history": snap["chart"][-60:],
@@ -947,10 +1050,13 @@ def predict_series(symbol, horizon=15):
         "expected_move_pct": round((points[-1]["mid"] / price - 1) * 100, 2),
         "factors": factors,
         "sentiment": {"score": round(senti, 2), "pos": pos_hits, "neg": neg_hits},
+        "backtest": {"hit_rate": hit_rate, "mae_pct": mae, "n": n_test,
+                     "note": "walk-forward, out-of-sample, this stock only"},
         "points": points,
-        "disclaimer": ("Factor-model estimate from trend, RSI, volume, 52w position, "
-                       "momentum, Nifty regime & news sentiment. Markets are not "
-                       "predictable — treat the band, not the line, as the message."),
+        "disclaimer": ("Ridge regression trained on this stock's own history "
+                       "(9 features), walk-forward backtested. Even good models "
+                       "are barely better than a coin flip day-to-day — the "
+                       "shaded band is the honest forecast, not the line."),
     }
 
 
