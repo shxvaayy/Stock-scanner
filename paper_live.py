@@ -133,9 +133,12 @@ def mfi(high, low, close, volume, period=8):
 
 
 # ── Config ──
+# 2026-07-06: TCS and HDFCBANK removed after 76 live paper sessions —
+# TCS -Rs1,404 (45% WR, 11 trades), HDFCBANK -Rs560 (50% WR, 10 trades).
+# Same-period replay without them: +Rs4,925 -> +Rs6,889 (73.1% -> 76.2% WR).
 STOCKS = [
-    "HDFCBANK-EQ", "ICICIBANK-EQ", "KOTAKBANK-EQ", "AXISBANK-EQ", "SBIN-EQ",
-    "INFY-EQ", "TCS-EQ", "HCLTECH-EQ", "WIPRO-EQ",
+    "ICICIBANK-EQ", "KOTAKBANK-EQ", "AXISBANK-EQ", "SBIN-EQ",
+    "INFY-EQ", "HCLTECH-EQ", "WIPRO-EQ",
     "ITC-EQ", "HINDUNILVR-EQ",
     "SUNPHARMA-EQ",
     "BAJFINANCE-EQ",
@@ -156,6 +159,10 @@ SECTOR_MAP = {
 # S1 v2.1: RSI(5) on 5-min candles with uptick confirmation
 RSI_PERIOD = 5
 RSI_OVERSOLD = 20              # RSI must be below 20
+# 2026-07-06: falling-knife guard — entries with RSI(5) still below 12 lost
+# money in live paper data (7 trades, -Rs388 combined, <=50% WR). An uptick
+# that deep is usually a dead-cat bounce inside a real selloff.
+RSI_ENTRY_FLOOR = 12           # skip entry if RSI(5) hasn't recovered to 12
 RSI_EXIT_PARTIAL = 50          # 40% position exits at RSI > 50
 ATR_SL_MULT = 3.0              # 3x ATR on 15-min = disaster stop only
 TIME_STOP_MINUTES = 75         # 75-minute time stop
@@ -965,6 +972,18 @@ def main():
                         continue
 
                     # ── RSI(5) uptick from below 20 — run filter stack ──
+
+                    # Falling-knife guard: an uptick with RSI still below 12
+                    # is usually a dead-cat bounce inside a live selloff.
+                    if curr_rsi5 < RSI_ENTRY_FLOOR:
+                        logger.log_thought(
+                            sym, curr_price, curr_rsi5, "RSI5_UPTICK",
+                            regime_ok, curr_vwap, vwap_distance, ker_val,
+                            "FILTERED", f"RSI(5)={curr_rsi5:.1f} < {RSI_ENTRY_FLOOR} — falling-knife guard",
+                            mfi_val=mfi_val, market_regime=regime.value,
+                            side="LONG", ibs=prior_ibs,
+                        )
+                        continue
 
                     # Already holding in S1?
                     if any(p["symbol"] == sym for p in portfolio.positions.values()):
